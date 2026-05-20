@@ -1,88 +1,108 @@
 # ibtracs-gev-na
 
-> **Generalized Extreme Value fit to IBTrACS North Atlantic annual-maximum 1-minute sustained wind, with bootstrap uncertainty quantification.**
+> **Extreme-value analysis and posterior-predictive event catalogue for North Atlantic tropical cyclone annual maximum 1-minute sustained wind, IBTrACS 1980–2024.**
 
-**Headline result (1980–2024, n = 45 seasons):**
+Three estimators (MLE, L-moments, Bayesian NUTS) are compared head-to-head; a 10,000-year synthetic catalogue is drawn from the Bayesian posterior; and 17 named historic storms are attributed posterior return periods.
 
-| Return period | 1-min sustained wind (kt) | 95% bootstrap CI |
-|---:|---:|---:|
-| 10-yr  | 154 | [148, 165] |
-| 50-yr  | 163 | [158, 175] |
-| **100-yr** | **165** | **[159, 183]** |
-| 500-yr | 168 | [160, 197] |
+---
 
-GEV parameters: ξ = −0.470, μ = 123.2 kt, σ = 22.2 kt. Shape parameter ξ < 0 implies a Weibull-type (bounded upper tail) regime — physically consistent with a thermodynamic ceiling on maximum sustained wind.
+## Headline results
+
+**Posterior median 100-year return level: 171 kt (95% credible interval [162, 192]).**
+
+| Estimator | ξ | μ (kt) | σ (kt) | RL₁₀₀ (kt) | RL₁₀₀ 95% interval |
+|---|---:|---:|---:|---:|---|
+| MLE (frequentist) | −0.470 | 123.2 | 22.2 | 165 | [159, 183] (bootstrap) |
+| L-moments (Hosking 1985) | −0.377 | 135.2 | 22.3 | 184 | — |
+| **Bayesian (NUTS)** | **−0.348** | **121.4** | **21.8** | **171** | **[162, 192] (credible)** |
+
+The three estimators triangulate the 100-year wind at **165–184 kt** — all Cat 5 territory, consistent with the NA basin historic peaks of Allen 1980 (165 kt) and Wilma 2005 (160 kt).
+
+| Historic storm | Peak USA_WIND (kt) | Posterior RP (yr) | 95% CrI |
+|---|---:|---:|---|
+| Allen (1980) | 165 | 34 | [10, 421] |
+| Gilbert (1988) / Wilma (2005) / Dorian (2019) | 160 | 17 | [7, 52] |
+| Mitch (1998) / Rita (2005) / Irma (2017) | 155 | 10 | [5, 21] |
+| Andrew (1992) / Katrina (2005) / Maria (2017) / Dean (2007) | 150 | 6 | [4, 11] |
+| Isabel (2003) / Ivan (2004) | 145 | 4 | [3, 7] |
+| Michael (2018) / Ian (2022) | 140 | 3 | [2, 5] |
+| Harvey (2017) | 115 | 1 | [1, 2] |
+| Sandy (2012) | 100 | 1 | [1, 1] |
+
+(See `figures/named_storms.md` for the full table including synthetic-catalogue empirical RPs.)
 
 ---
 
 ## Quickstart
 
 ```bash
-# Python 3.14, managed via uv
-uv sync                  # or: pip install -r requirements.txt
-python download.py       # fetch IBTrACS NA basin CSV (~57 MB) from NOAA NCEI
-python fit_gev.py        # fit + bootstrap + render plots + print report
+uv sync                       # or: pip install -r requirements.txt
+python download.py            # fetch IBTrACS NA basin CSV (~57 MB) from NOAA NCEI
+python fit_gev.py             # MLE + bootstrap + L-moments  (~2 s)
+python bayesian_gev.py        # NUTS, 4 chains, 1k warmup + 2k samples (~10 s on CPU)
+python event_catalogue.py     # 10000-yr posterior-predictive catalogue + named storms
 ```
 
-Outputs land in `figures/` (`gev_fit.png`, `return_level.png`) plus a printed report in stdout.
-
-## Usage
-
-The whole pipeline is `fit_gev.py:main`. Each step is a pure function and can be reused:
-
-```python
-from fit_gev import load_ibtracs, clean, annual_maxima, fit_gev, return_level, bootstrap
-
-df = load_ibtracs(Path("data/raw/ibtracs.NA.list.v04r01.csv"))
-am = annual_maxima(clean(df))           # 45 floats, indexed by SEASON
-params = fit_gev(am)                    # {"xi", "mu", "sigma"}
-rl_100 = return_level(params, T=100)    # 165.0
-boot = bootstrap(am, B=1000, periods=(100,), seed=20260521)
-```
+All outputs land in `figures/` plus stdout reports.
 
 ## Method
 
-1. **Data**. IBTrACS v04r01, North Atlantic basin file. Field `USA_WIND` (NHC-calibrated 1-min sustained wind, knots) is used exclusively — this avoids the 1-min vs 10-min averaging mismatch across agency-reported fields. Filter to `BASIN == "NA"`, `1980 ≤ SEASON ≤ 2024`, `USA_WIND > 0`. The 1980 cutoff reflects the era of consistent geostationary-satellite TC monitoring; pre-1980 best-track intensity estimates have larger and time-varying observational uncertainty.
+1. **Data**. IBTrACS v04r01 North Atlantic basin file. Field `USA_WIND` (NHC-calibrated 1-min sustained wind) is used exclusively to avoid the 1-min vs 10-min averaging mismatch across agencies. Filter: `BASIN == "NA"`, `1980 ≤ SEASON ≤ 2024`, `USA_WIND > 0`. The 1980 cutoff reflects the era of consistent geostationary-satellite TC monitoring.
 
-2. **Block maxima**. Annual maximum `USA_WIND` per season. n = 45.
+2. **Block maxima**. Annual maximum `USA_WIND` per season; n = 45.
 
-3. **GEV fit**. MLE via `scipy.stats.genextreme.fit`. Note scipy uses `c = −ξ`.
+3. **Three GEV estimators**.
+   - **MLE** (`scipy.stats.genextreme.fit`) with non-parametric bootstrap CI (B = 1000).
+   - **L-moments** (Hosking 1990, closed-form from sample L-moments via Landwehr 1979 unbiased plotting positions). Implemented from first principles; no external L-moments package dependency.
+   - **Bayesian** (numpyro / JAX NUTS). Custom JAX GEV log-density with support-boundary masking. Weakly informative priors:
+     - `μ ∼ Normal(130, 50)`
+     - `σ ∼ HalfNormal(30)`
+     - `ξ ∼ Normal(−0.2, 0.15)` — centred on the TC-EVT literature suggestion of a bounded upper tail.
+   - 4 chains × (1000 warmup + 2000 samples); R-hat = 1.00 for all parameters; ESS = 2.5k–4k. ~3% divergence rate is attributable to the GEV support boundary; addressed via target_accept = 0.99 and documented (see Limitations).
 
-4. **Return levels**. *T*-year return level = GEV(1 − 1/*T*) quantile.
+4. **Return levels**. Closed-form GEV quantile per posterior sample; report posterior median + 2.5/97.5 quantiles.
 
-5. **Uncertainty**. Non-parametric bootstrap (B = 1000, fixed seed) over the 45-vector of annual maxima. Each resample is independently MLE-fit; 95% CI is the empirical 2.5%/97.5% quantile of resampled ξ and return levels.
+5. **Stochastic event catalogue**. 10,000-year synthetic catalogue drawn via posterior-predictive sampling — for each synthetic year, a (μᵢ, σᵢ, ξᵢ) triple is drawn from the posterior and a single GEV variate is sampled. Parameter uncertainty is propagated into the catalogue itself, closer to how production cat models marginalise over event-set parameters.
 
-## Results
+6. **Named-storm return periods**. For each iconic storm 1980–2024, compute exceedance probability `P(annual_max ≥ storm_peak)` analytically per posterior sample → posterior distribution of return periods.
 
-The plots are reproduced from `figures/`:
+## Figures
 
 ![GEV fit](figures/gev_fit.png)
+![Return level (MLE+bootstrap)](figures/return_level.png)
+![Posterior marginals](figures/posterior_marginals.png)
+![Bayesian return level](figures/return_level_bayes.png)
+![Synthetic catalogue + historic storms](figures/catalogue_overlay.png)
 
-![Return level curve](figures/return_level.png)
-
-Empirical Weibull plotting positions ((n + 1) / (n + 1 − rank)) overlay the parametric curve closely across the observed range, supporting the GEV-family assumption.
+Empirical Weibull plotting positions ((n + 1) / (n + 1 − rank)) overlay the parametric curves closely across the observed range, supporting the GEV-family assumption.
 
 ## Limitations
 
-- **Small-sample MLE**. With n = 45, the MLE estimate of ξ is unstable: bootstrap 95% CI is [−4.5, −0.1]. Return-level CIs are tighter (joint reparameterisation absorbs ξ noise into μ, σ), but a production system should use L-moments (Hosking 1990) or a Bayesian fit with an informative prior on ξ.
-- **Stationarity assumption**. GEV(μ, σ, ξ) is assumed time-invariant. ENSO modulation and any anthropogenic trend are not modelled. A natural next step is a non-stationary GEV with year, ENSO index, or SST anomaly as covariate(s) on μ.
-- **All NA tracks, not landfalls**. The annual maximum is taken over the entire North Atlantic basin, not over land or coastal observations only. Landfall-conditioned return levels would require additional filtering of the `LANDFALL` field and would change ξ.
-- **No declustering**. Block maxima are taken per calendar season; no explicit treatment of dependence between sequential storms within a season.
+- **Small-sample tail-bias**. With n = 45, MLE ξ is unstable (95% bootstrap CI [−4.5, −0.1]); L-moments and Bayesian estimates agree on ξ ≈ −0.35, suggesting MLE under-estimates ξ (over-bounds tail). Production work should report the L-moments + Bayesian envelope, not MLE alone.
+- **Stationarity assumption**. All three estimators assume time-invariant GEV(μ, σ, ξ). ENSO modulation and anthropogenic trend are not modelled. A natural extension is non-stationary GEV with year, ONI, or SST anomaly as covariates on μ (Coles 2001, Ch 6).
+- **GEV support-boundary divergences in NUTS**. The GEV likelihood is −∞ outside `1 + ξ(y−μ)/σ > 0`, creating a sharp boundary that NUTS occasionally crosses (~3% divergence rate). Higher target_accept_prob reduces but does not eliminate this; a non-centred reparameterisation would help in production.
+- **All NA tracks, not landfalls**. Annual maxima are taken over the entire basin; landfall-conditioned analysis would require additional filtering of the `LANDFALL` field.
+- **No declustering**. Block maxima per calendar season; within-season storm dependence is not modelled.
 
-## Source
+## Source and citation
 
-Knapp, K. R., M. C. Kruk, D. H. Levinson, H. J. Diamond, and C. J. Neumann, 2010: The International Best Track Archive for Climate Stewardship (IBTrACS): Unifying tropical cyclone best track data. *Bulletin of the American Meteorological Society*, 91, 363–376. <https://doi.org/10.1175/2009BAMS2755.1>
+- Knapp, K. R., M. C. Kruk, D. H. Levinson, H. J. Diamond, and C. J. Neumann, 2010: *The International Best Track Archive for Climate Stewardship (IBTrACS): Unifying tropical cyclone best track data*. Bulletin of the American Meteorological Society, 91, 363–376. <https://doi.org/10.1175/2009BAMS2755.1>
+- Hosking, J. R. M., 1990: *L-moments: Analysis and Estimation of Distributions Using Linear Combinations of Order Statistics*. JRSS B, 52, 105–124.
+- Coles, S., 2001: *An Introduction to Statistical Modeling of Extreme Values*. Springer.
 
 ## Repository layout
 
 ```
-├── fit_gev.py            # main pipeline (one entrypoint, pure functions)
-├── download.py           # idempotent IBTrACS fetcher
+├── fit_gev.py                    # MLE + bootstrap + L-moments
+├── bayesian_gev.py               # numpyro NUTS Bayesian fit
+├── event_catalogue.py            # synthetic catalogue + named-storm RPs
+├── download.py                   # idempotent IBTrACS fetcher
 ├── data/
 │   ├── README.md
-│   └── raw/              # 57 MB CSV, gitignored
-├── figures/              # rendered plots, tracked
+│   └── raw/                      # 57 MB CSV, gitignored
+├── figures/                      # rendered plots + named_storms.md, tracked
+├── posterior_samples.npz         # gitignored (regenerated by bayesian_gev.py)
 ├── requirements.txt
-├── pyproject.toml        # uv-managed
+├── pyproject.toml                # uv-managed
 └── README.md
 ```
