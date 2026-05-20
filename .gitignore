@@ -17,3 +17,4 @@ __pycache__/
 
 # Outputs that should be regenerable, not tracked
 # (figures ARE tracked — they're rendered for README)
+posterior_samples.npz
