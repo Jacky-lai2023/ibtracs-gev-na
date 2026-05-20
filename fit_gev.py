@@ -26,8 +26,18 @@ BOOTSTRAP_SEED = 20260521
 
 
 def load_ibtracs(path: Path) -> pd.DataFrame:
-    """Read IBTrACS CSV. Row 1 is a units row in v04r01 — skip it."""
-    return pd.read_csv(path, skiprows=[1], low_memory=False, na_values=[" ", ""])
+    """Read IBTrACS CSV. Row 1 is a units row in v04r01 — skip it.
+
+    keep_default_na=False is critical: pandas' default na_values includes the
+    string "NA", which would silently null out every North Atlantic basin row.
+    """
+    return pd.read_csv(
+        path,
+        skiprows=[1],
+        low_memory=False,
+        keep_default_na=False,
+        na_values=["", " "],
+    )
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
