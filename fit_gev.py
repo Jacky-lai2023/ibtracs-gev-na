@@ -61,6 +61,40 @@ def fit_gev(am: pd.Series) -> dict:
     return {"xi": -c, "mu": float(loc), "sigma": float(scale), "_scipy_c": c}
 
 
+def fit_gev_lmoments(am: pd.Series) -> dict:
+    """L-moments estimator (Hosking 1985, closed form).
+
+    More stable than MLE for small samples (n < 50). Used as a sanity check
+    on the MLE shape parameter, which is known to be unstable with small n.
+
+    Reference: Hosking, J. R. M. (1990). L-moments: Analysis and Estimation
+    of Distributions Using Linear Combinations of Order Statistics.
+    Journal of the Royal Statistical Society B, 52(1), 105–124.
+    """
+    from math import gamma, log
+
+    x = np.sort(am.values)
+    n = len(x)
+    # Sample L-moments via unbiased plotting-position estimators (Landwehr 1979)
+    i = np.arange(1, n + 1)
+    b0 = x.mean()
+    b1 = ((i - 1) / (n - 1) * x).sum() / n
+    b2 = ((i - 1) * (i - 2) / ((n - 1) * (n - 2)) * x).sum() / n
+    lam1 = b0
+    lam2 = 2 * b1 - b0
+    lam3 = 6 * b2 - 6 * b1 + b0
+    t3 = lam3 / lam2  # L-skewness
+
+    # Hosking 1985 closed-form (valid for |t3| < 1)
+    c = 2 / (3 + t3) - log(2) / log(3)
+    k = 7.8590 * c + 2.9554 * c * c
+    # In Hosking's k convention, ξ_EVT = -k (scipy uses c = +k)
+    xi = -k
+    sigma = (lam2 * k) / ((1 - 2 ** (-k)) * gamma(1 + k))
+    mu = lam1 - sigma * (gamma(1 + k) - 1) / k
+    return {"xi": xi, "mu": float(mu), "sigma": float(sigma), "_scipy_c": k}
+
+
 def return_level(params: dict, T: float) -> float:
     """T-year return level: quantile at probability 1 - 1/T."""
     return float(genextreme.ppf(1 - 1 / T, params["_scipy_c"], params["mu"], params["sigma"]))
@@ -180,9 +214,16 @@ def main() -> int:
           f"max={am.max():.0f} kt, median={am.median():.0f} kt")
 
     params = fit_gev(am)
+    params_lm = fit_gev_lmoments(am)
     boot = bootstrap(am, B=BOOTSTRAP_B, periods=RETURN_PERIODS, seed=BOOTSTRAP_SEED)
     print()
     print(report(am, params, boot))
+    print()
+    print("L-moments (Hosking 1985) — small-sample-robust sanity check:")
+    print(f"  xi    = {params_lm['xi']:+.4f}")
+    print(f"  mu    = {params_lm['mu']:.2f} kt")
+    print(f"  sigma = {params_lm['sigma']:.2f} kt")
+    print(f"  RL_100 = {return_level(params_lm, 100):.1f} kt")
 
     plot_fit(am, params, FIG_DIR / "gev_fit.png")
     plot_return_level(am, params, boot, FIG_DIR / "return_level.png")
