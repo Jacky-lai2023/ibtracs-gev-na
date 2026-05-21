@@ -79,6 +79,34 @@ def posterior_return_period(intensity: float, samples: dict) -> np.ndarray:
     return np.where(p_exceed > 1e-9, 1.0 / p_exceed, np.inf)
 
 
+SAFFIR_SIMPSON_BANDS = [
+    ("TS 34-63", 34, 64),
+    ("Cat 1 64-82", 64, 83),
+    ("Cat 2 83-95", 83, 96),
+    ("Cat 3 96-112", 96, 113),
+    ("Cat 4 113-136", 113, 137),
+    ("Cat 5 >=137", 137, 1000),
+]
+
+
+def saffir_simpson_ppc(observed: np.ndarray, synthetic: np.ndarray) -> pd.DataFrame:
+    """Posterior predictive check: observed vs synthetic distribution by Saffir-Simpson band.
+
+    Strong agreement (< 2 percentage-point error per band) is evidence that the
+    Bayesian GEV correctly reproduces the data-generating distribution at the
+    discretisation most relevant to insurance applications.
+    """
+    rows = []
+    n_obs = len(observed)
+    n_syn = len(synthetic)
+    for name, lo, hi in SAFFIR_SIMPSON_BANDS:
+        obs_pct = 100 * ((observed >= lo) & (observed < hi)).sum() / n_obs
+        syn_pct = 100 * ((synthetic >= lo) & (synthetic < hi)).sum() / n_syn
+        rows.append({"band": name, "observed_%": obs_pct, "synthetic_%": syn_pct,
+                     "abs_diff_pp": abs(obs_pct - syn_pct)})
+    return pd.DataFrame(rows)
+
+
 def summarise_rp(rp_draws: np.ndarray) -> tuple[float, float, float]:
     finite = rp_draws[np.isfinite(rp_draws)]
     if len(finite) == 0:
@@ -140,7 +168,18 @@ def main() -> int:
     storms = extract_iconic_peaks(df)
     print(f"\niconic storms extracted from IBTrACS: n={len(storms)}")
 
-    # 3. Return period per storm, posterior + empirical
+    # 3. Saffir-Simpson posterior predictive check
+    am = annual_maxima(df).values
+    ppc = saffir_simpson_ppc(am, cat)
+    print(f"\nSaffir-Simpson posterior predictive check (observed n={len(am)} vs synthetic n={len(cat):,}):")
+    print(f"  {'band':>14} | {'observed %':>10} | {'synthetic %':>11} | {'abs diff (pp)':>14}")
+    for _, r in ppc.iterrows():
+        print(f"  {r['band']:>14} | {r['observed_%']:>10.2f} | {r['synthetic_%']:>11.2f} | {r['abs_diff_pp']:>14.2f}")
+    max_dev = ppc["abs_diff_pp"].max()
+    verdict = "EXCELLENT (<2 pp)" if max_dev < 2 else "ACCEPTABLE (<3 pp)" if max_dev < 3 else "REVIEW NEEDED"
+    print(f"  → Max |observed - synthetic| across bands: {max_dev:.2f} pp  ({verdict})")
+
+    # 4. Return period per storm, posterior + empirical
     rows = []
     for _, s in storms.iterrows():
         rp_post = posterior_return_period(s["peak_kt"], samples)

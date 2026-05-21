@@ -110,7 +110,7 @@ def plot_posterior(samples: dict, path: Path) -> None:
         ax.axvline(lo, color="black", lw=0.8, ls="--", label=f"95% CrI [{lo:.3f}, {hi:.3f}]")
         ax.axvline(hi, color="black", lw=0.8, ls="--")
         ax.set_xlabel(name)
-        ax.set_ylabel("density")
+        ax.set_ylabel("Density")
         ax.legend(frameon=False, fontsize=8, loc="upper right")
     fig.suptitle("Bayesian GEV — posterior marginals (NUTS, 4 chains)")
     fig.tight_layout()
