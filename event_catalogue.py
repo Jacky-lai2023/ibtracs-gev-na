@@ -67,7 +67,17 @@ def sample_catalogue(samples: dict, years: int, seed: int) -> np.ndarray:
     xi = samples["xi"][idx]
     # Our posterior xi follows the EVT convention (xi<0 -> Weibull / bounded above).
     # scipy.stats.genextreme uses c = -xi_EVT, so pass -xi.
-    return genextreme.rvs(-xi, loc=mu, scale=sigma, random_state=rng)
+    cat = genextreme.rvs(-xi, loc=mu, scale=sigma, random_state=rng)
+    if not np.isfinite(cat).all():
+        import warnings
+        n_bad = int((~np.isfinite(cat)).sum())
+        warnings.warn(
+            f"posterior-predictive catalogue has {n_bad} non-finite samples "
+            f"(out of {years}); these will be dropped from downstream stats",
+            RuntimeWarning, stacklevel=2,
+        )
+        cat = cat[np.isfinite(cat)]
+    return cat
 
 
 def posterior_return_period(intensity: float, samples: dict) -> np.ndarray:

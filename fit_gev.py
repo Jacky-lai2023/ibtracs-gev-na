@@ -148,15 +148,22 @@ def ci(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
 def mann_kendall_trend(values: np.ndarray) -> dict:
     """Mann-Kendall non-parametric trend test on a 1-D series.
 
-    H0: no monotonic trend. Reject for p < alpha.
-    Returns dict(tau, S, z, p_value).
+    H0: no monotonic trend. Reject for p < alpha. Variance includes the
+    tie correction from Hipel & McLeod (1994), which matters when data
+    are quantized (e.g. USA_WIND reported in 5-kt increments).
+
+    Returns dict(tau, S, z, p_value, n_tied_groups).
     """
+    from collections import Counter
     n = len(values)
     s = 0
     for i in range(n - 1):
         for j in range(i + 1, n):
             s += np.sign(values[j] - values[i])
-    var_s = n * (n - 1) * (2 * n + 5) / 18
+    # Tie correction: subtract sum_groups t(t-1)(2t+5) for each tie group of size t>1
+    ties = Counter(values)
+    tie_term = sum(t * (t - 1) * (2 * t + 5) for t in ties.values() if t > 1)
+    var_s = (n * (n - 1) * (2 * n + 5) - tie_term) / 18
     if s > 0:
         z = (s - 1) / np.sqrt(var_s)
     elif s < 0:
@@ -165,7 +172,8 @@ def mann_kendall_trend(values: np.ndarray) -> dict:
         z = 0.0
     p = 2 * (1 - norm.cdf(abs(z)))
     tau = s / (n * (n - 1) / 2)
-    return {"tau": float(tau), "S": float(s), "z": float(z), "p_value": float(p)}
+    return {"tau": float(tau), "S": float(s), "z": float(z), "p_value": float(p),
+            "n_tied_groups": sum(1 for t in ties.values() if t > 1)}
 
 
 def goodness_of_fit(am: pd.Series, params: dict, B_lilliefors: int = 500, seed: int = 20260521) -> dict:
@@ -180,14 +188,18 @@ def goodness_of_fit(am: pd.Series, params: dict, B_lilliefors: int = 500, seed: 
     scale = params["sigma"]
     ks_stat, ks_p_raw = kstest(x, "genextreme", args=(c, loc, scale))
     cvm = cramervonmises(x, "genextreme", args=(c, loc, scale))
-    # Lilliefors via parametric bootstrap
+    # Lilliefors via parametric bootstrap (mirror bootstrap()'s defensive pattern)
     rng = np.random.default_rng(seed)
-    null_ks = np.empty(B_lilliefors)
+    null_ks = np.full(B_lilliefors, np.nan)
     for b in range(B_lilliefors):
-        sim = genextreme.rvs(c, loc=loc, scale=scale, size=len(x), random_state=rng)
-        c_s, loc_s, scale_s = genextreme.fit(sim)
-        null_ks[b], _ = kstest(sim, "genextreme", args=(c_s, loc_s, scale_s))
-    ks_p_lilli = float((null_ks >= ks_stat).mean())
+        try:
+            sim = genextreme.rvs(c, loc=loc, scale=scale, size=len(x), random_state=rng)
+            c_s, loc_s, scale_s = genextreme.fit(sim)
+            null_ks[b], _ = kstest(sim, "genextreme", args=(c_s, loc_s, scale_s))
+        except (RuntimeError, ValueError, FloatingPointError):
+            pass  # leave as nan; will be excluded below
+    valid = ~np.isnan(null_ks)
+    ks_p_lilli = float((null_ks[valid] >= ks_stat).mean()) if valid.any() else float("nan")
     return {
         "ks_stat": float(ks_stat),
         "ks_p_raw": float(ks_p_raw),
@@ -289,6 +301,11 @@ def report(am: pd.Series, params: dict, boot: dict) -> str:
         rl = return_level(params, T)
         lo, hi = ci(boot[f"rl_{T}"])
         lines.append(f"  {T:4d}-yr : {rl:6.1f} kt  [{lo:5.1f}, {hi:5.1f}]")
+    # Surface bootstrap failure rate inline (not just stderr warning).
+    n_failed = boot.get("_n_failed", 0)
+    B_total = boot.get("_B", len(boot["xi"]))
+    if n_failed > 0:
+        lines.append(f"  bootstrap failures: {n_failed}/{B_total} ({n_failed/B_total:.2%})")
     lines.append("=" * 60)
     return "\n".join(lines)
 

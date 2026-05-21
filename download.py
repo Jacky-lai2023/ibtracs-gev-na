@@ -34,25 +34,32 @@ def main() -> int:
             print(f"could not verify size against server; re-downloading to be safe")
     print(f"downloading {URL}")
     tmp = OUT.with_suffix(OUT.suffix + ".part")
-    with requests.get(URL, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("Content-Length", expected))
-        written = 0
-        with tmp.open("wb") as f:
-            for chunk in r.iter_content(chunk_size=1 << 16):
-                f.write(chunk)
-                written += len(chunk)
-                if total:
-                    pct = 100 * written / total
-                    print(f"\r  {written / 1e6:6.1f} / {total / 1e6:.1f} MB ({pct:5.1f}%)", end="")
-        print()
-    # Atomic rename only after a complete, size-verified download.
-    if total and tmp.stat().st_size != total:
-        tmp.unlink()
-        raise RuntimeError(
-            f"incomplete download: got {tmp.stat().st_size} bytes, expected {total}"
-        )
-    tmp.replace(OUT)
+    try:
+        with requests.get(URL, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length", expected))
+            written = 0
+            with tmp.open("wb") as f:
+                for chunk in r.iter_content(chunk_size=1 << 16):
+                    f.write(chunk)
+                    written += len(chunk)
+                    if total:
+                        pct = 100 * written / total
+                        print(f"\r  {written / 1e6:6.1f} / {total / 1e6:.1f} MB ({pct:5.1f}%)", end="")
+            print()
+        # Capture size BEFORE any unlink, so error messages format correctly.
+        actual_size = tmp.stat().st_size
+        if total and actual_size != total:
+            raise RuntimeError(
+                f"incomplete download: got {actual_size} bytes, expected {total}"
+            )
+        # Atomic rename only after a complete, size-verified download.
+        tmp.replace(OUT)
+    except BaseException:
+        # Always clean up the partial file on any error or interrupt
+        # (including KeyboardInterrupt and RuntimeError from size mismatch).
+        tmp.unlink(missing_ok=True)
+        raise
     print(f"wrote {OUT} ({OUT.stat().st_size / 1e6:.1f} MB)")
     return 0
 

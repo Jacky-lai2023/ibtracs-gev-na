@@ -62,7 +62,7 @@ All outputs land in `figures/` plus stdout reports.
 
 4. **Stationarity test.** Mann-Kendall non-parametric trend on the annual maxima:
    ```
-   Kendall tau = +0.241, z = +2.328, p = 0.0199
+   Kendall tau = +0.241, z = +2.338, p = 0.0194  (variance includes tie correction; USA_WIND is 5-kt quantized)
    → Stationarity is rejected at α = 0.05.
    ```
    The data show a statistically significant positive trend. We fit a stationary GEV as a working approximation; a non-stationary GEV with year, ENSO index, or SST anomaly as covariates on μ is the principled next step (Coles 2001, Ch 6) and is left as future work.
