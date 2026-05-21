@@ -2,7 +2,7 @@
 
 > **Extreme-value analysis and posterior-predictive event catalogue for North Atlantic tropical cyclone annual maximum 1-minute sustained wind, IBTrACS 1980–2024.**
 
-Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (< 2 pp error across all six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p > 0.5), and a cutoff sensitivity table.
+Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.77 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
 
 ---
 
@@ -14,7 +14,7 @@ Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return
 |---|---:|---:|---:|---:|---|
 | MLE | −0.470 | 123.2 | 22.2 | 165 | [159, 183] bootstrap (see caveats) |
 | L-moments (Hosking 1990) | −0.377 | 122.0 | 22.3 | 171 | — |
-| **Bayesian NUTS (primary)** | **−0.348** | **121.4** | **21.8** | **171** | **[162, 192] credible** |
+| **Bayesian NUTS (primary)** | **−0.348** | **121.5** | **21.5** | **171** | **[162, 192] credible** |
 
 The three estimators agree within a tight **165–171 kt window**, consistent with the NA basin historic peaks Allen 1980 (165 kt) and Wilma 2005 / Gilbert 1988 / Dorian 2019 (160 kt).
 
@@ -92,18 +92,18 @@ All outputs land in `figures/` plus stdout reports.
 
 8. **Stochastic event catalogue.** 10,000-year synthetic catalogue drawn via posterior-predictive sampling — for each synthetic year, a (μᵢ, σᵢ, ξᵢ) triple is drawn from the posterior and a single GEV variate is sampled. Parameter uncertainty is propagated into the catalogue itself, closer to how production cat models marginalise over event-set parameters.
 
-9. **Saffir-Simpson posterior predictive check.** Observed (n=45) vs synthetic (n=10,000) annual maximum distributions by Saffir-Simpson category:
+9. **Saffir-Simpson posterior predictive check.** Observed (n=45) vs synthetic (n=10,000) annual maximum distributions by Saffir-Simpson category. Bin edges are at half-integer midpoints between adjacent NHC thresholds so integer-kt observed values and continuous synthetic samples are assigned unambiguously:
 
    | Band | Observed % | Synthetic % | |diff| (pp) |
    |---|---:|---:|---:|
    | TS 34–63 kt | 0.00 | 0.27 | 0.27 |
-   | Cat 1 64–82 kt | 2.22 | 1.78 | 0.44 |
-   | Cat 2 83–95 kt | 4.44 | 5.14 | 0.70 |
-   | Cat 3 96–112 kt | 15.56 | 16.64 | 1.08 |
-   | Cat 4 113–136 kt | 42.22 | 40.68 | 1.54 |
-   | **Cat 5 ≥ 137 kt** | **35.56** | **35.49** | **0.07** |
+   | Cat 1 64–82 kt | 2.22 | 1.72 | 0.50 |
+   | Cat 2 83–95 kt | 4.44 | 4.93 | 0.49 |
+   | Cat 3 96–112 kt | 15.56 | 16.25 | 0.69 |
+   | Cat 4 113–136 kt | 42.22 | 40.45 | 1.77 |
+   | **Cat 5 ≥ 137 kt** | **35.56** | **36.39** | **0.83** |
 
-   Maximum deviation 1.54 pp; mean 0.68 pp. The Bayesian GEV reproduces the data-generating distribution at the discretisation most relevant to insurance applications.
+   Maximum deviation 1.77 pp; mean 0.76 pp. The Bayesian GEV reproduces the data-generating distribution at the discretisation most relevant to insurance applications.
 
 10. **Named-storm return periods.** For each iconic storm 1980–2024, compute exceedance probability `P(annual_max ≥ storm_peak)` analytically per posterior sample → posterior distribution of return periods.
 

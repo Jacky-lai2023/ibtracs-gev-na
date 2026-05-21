@@ -41,11 +41,19 @@ def extract_iconic_peaks(df_clean: pd.DataFrame) -> pd.DataFrame:
     df_clean = df_clean.copy()
     df_clean["NAME_U"] = df_clean["NAME"].astype(str).str.strip().str.upper()
     rows = []
+    missing = []
     for name, year in ICONIC_STORMS:
         sub = df_clean[(df_clean["NAME_U"] == name.upper()) & (df_clean["SEASON"] == year)]
         if len(sub) == 0:
+            missing.append(f"{name} {year}")
             continue
         rows.append({"name": name, "year": year, "peak_kt": float(sub["USA_WIND"].max())})
+    if missing:
+        import warnings
+        warnings.warn(
+            f"ICONIC_STORMS not found in IBTrACS: {', '.join(missing)}",
+            RuntimeWarning, stacklevel=2,
+        )
     return pd.DataFrame(rows).sort_values("peak_kt", ascending=False).reset_index(drop=True)
 
 
@@ -57,10 +65,8 @@ def sample_catalogue(samples: dict, years: int, seed: int) -> np.ndarray:
     mu = samples["mu"][idx]
     sigma = samples["sigma"][idx]
     xi = samples["xi"][idx]
-    # scipy uses c = +xi (where xi here is EVT convention) — but our convention
-    # matches scipy's c directly (we sampled in this convention); see bayesian_gev.
-    # genextreme.rvs uses c such that pdf has (1 + c*z)^(-1/c-1). EVT xi = -c.
-    # So we pass c = -xi to scipy.
+    # Our posterior xi follows the EVT convention (xi<0 -> Weibull / bounded above).
+    # scipy.stats.genextreme uses c = -xi_EVT, so pass -xi.
     return genextreme.rvs(-xi, loc=mu, scale=sigma, random_state=rng)
 
 
@@ -80,12 +86,18 @@ def posterior_return_period(intensity: float, samples: dict) -> np.ndarray:
 
 
 SAFFIR_SIMPSON_BANDS = [
-    ("TS 34-63", 34, 64),
-    ("Cat 1 64-82", 64, 83),
-    ("Cat 2 83-95", 83, 96),
-    ("Cat 3 96-112", 96, 113),
-    ("Cat 4 113-136", 113, 137),
-    ("Cat 5 >=137", 137, 1000),
+    # (label, lower_edge, upper_edge)  -- half-open [lower, upper)
+    # Edges are midpoints between adjacent NHC integer thresholds so that
+    # continuous synthetic samples are assigned unambiguously while integer
+    # observed kt values fall into the obviously-correct band.
+    # NHC Saffir-Simpson integer thresholds (1-min sustained, kt):
+    #   TS 34-63 / Cat 1 64-82 / Cat 2 83-95 / Cat 3 96-112 / Cat 4 113-136 / Cat 5 >=137
+    ("TS 34-63", 33.5, 63.5),
+    ("Cat 1 64-82", 63.5, 82.5),
+    ("Cat 2 83-95", 82.5, 95.5),
+    ("Cat 3 96-112", 95.5, 112.5),
+    ("Cat 4 113-136", 112.5, 136.5),
+    ("Cat 5 >=137", 136.5, np.inf),
 ]
 
 
@@ -95,6 +107,10 @@ def saffir_simpson_ppc(observed: np.ndarray, synthetic: np.ndarray) -> pd.DataFr
     Strong agreement (< 2 percentage-point error per band) is evidence that the
     Bayesian GEV correctly reproduces the data-generating distribution at the
     discretisation most relevant to insurance applications.
+
+    Bin edges sit at half-integer midpoints between adjacent NHC thresholds, so
+    integer-kt observed values land in their natural band and continuous
+    synthetic values are assigned without gaps or overlap.
     """
     rows = []
     n_obs = len(observed)
@@ -107,10 +123,23 @@ def saffir_simpson_ppc(observed: np.ndarray, synthetic: np.ndarray) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def summarise_rp(rp_draws: np.ndarray) -> tuple[float, float, float]:
+def summarise_rp(rp_draws: np.ndarray, storm_label: str | None = None) -> tuple[float, float, float]:
+    """Median + 95% CrI of return periods. Warns if all draws are infinite."""
     finite = rp_draws[np.isfinite(rp_draws)]
     if len(finite) == 0:
+        import warnings
+        msg = "all posterior draws give infinite return period"
+        if storm_label:
+            msg = f"{storm_label}: {msg} (intensity beyond GEV support for every draw)"
+        warnings.warn(msg, RuntimeWarning, stacklevel=2)
         return float("inf"), float("inf"), float("inf")
+    inf_frac = 1.0 - len(finite) / len(rp_draws)
+    if inf_frac > 0.5 and storm_label:
+        import warnings
+        warnings.warn(
+            f"{storm_label}: {inf_frac:.1%} of posterior draws give infinite return period",
+            RuntimeWarning, stacklevel=2,
+        )
     med = float(np.median(finite))
     lo = float(np.quantile(finite, 0.025))
     hi = float(np.quantile(finite, 0.975))
@@ -183,7 +212,7 @@ def main() -> int:
     rows = []
     for _, s in storms.iterrows():
         rp_post = posterior_return_period(s["peak_kt"], samples)
-        med, lo, hi = summarise_rp(rp_post)
+        med, lo, hi = summarise_rp(rp_post, storm_label=f"{s['name']} ({int(s['year'])})")
         emp_count = int((cat >= s["peak_kt"]).sum())
         rp_empirical = CATALOGUE_YEARS / emp_count if emp_count > 0 else float("inf")
         rows.append({

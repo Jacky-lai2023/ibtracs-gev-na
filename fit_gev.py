@@ -75,7 +75,9 @@ def fit_gev_lmoments(am: pd.Series) -> dict:
 
     x = np.sort(am.values)
     n = len(x)
-    # Sample L-moments via unbiased plotting-position estimators (Landwehr 1979)
+    # Unbiased probability-weighted moment (PWM) estimators (Landwehr, Matalas
+    # & Wallis 1979, WRR 15(5):1055-1064). L-moments are linear combinations of
+    # these PWMs (Hosking 1990, eqs 2.3-2.5).
     i = np.arange(1, n + 1)
     b0 = x.mean()
     b1 = ((i - 1) / (n - 1) * x).sum() / n
@@ -85,15 +87,19 @@ def fit_gev_lmoments(am: pd.Series) -> dict:
     lam3 = 6 * b2 - 6 * b1 + b0
     t3 = lam3 / lam2  # L-skewness
 
-    # Hosking 1985 closed-form (valid for |t3| < 1)
+    # Closed-form GEV L-moments estimator (Hosking, Wallis & Wood 1985,
+    # Technometrics 27(3):251-261, eq 12; refined in Hosking 1990 §3 / Hosking
+    # & Wallis 1997 Appendix A.8). Hosking k convention: k_Hosking = -xi_EVT.
     c = 2 / (3 + t3) - log(2) / log(3)
     k = 7.8590 * c + 2.9554 * c * c
-    # In Hosking's k convention, ξ_EVT = -k (scipy uses c = +k)
-    xi = -k
+    xi = -k  # convert to EVT convention (xi<0 -> Weibull / bounded above)
     sigma = (lam2 * k) / ((1 - 2 ** (-k)) * gamma(1 + k))
-    # Hosking 1990 eq 14: mu = lam1 - sigma * (1 - Gamma(1+k)) / k
-    # (Earlier draft had the sign flipped; corrected against lmoments3 ground truth.)
+    # Location parameter mu = lam1 - sigma * (1 - Gamma(1+k)) / k.
+    # (Earlier draft had the sign flipped on the gamma term; corrected against
+    # the lmoments3 reference implementation and verified by E[X] = lam1.)
     mu = lam1 - sigma * (1 - gamma(1 + k)) / k
+    # _scipy_c stores k = -xi for direct use with scipy.stats.genextreme,
+    # which uses the c = -xi_EVT parameterisation.
     return {"xi": xi, "mu": float(mu), "sigma": float(sigma), "_scipy_c": k}
 
 
@@ -108,19 +114,30 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
     vals = am.values
     xis = np.empty(B)
     rls = {T: np.empty(B) for T in periods}
+    n_failed = 0
     for b in range(B):
         resample = rng.choice(vals, size=n, replace=True)
         try:
             p = fit_gev(pd.Series(resample))
-        except Exception:
+        except (RuntimeError, ValueError, FloatingPointError):
             xis[b] = np.nan
             for T in periods:
                 rls[T][b] = np.nan
+            n_failed += 1
             continue
         xis[b] = p["xi"]
         for T in periods:
             rls[T][b] = return_level(p, T)
-    return {"xi": xis, **{f"rl_{T}": rls[T] for T in periods}}
+    failure_rate = n_failed / B
+    if failure_rate > 0.01:
+        import warnings
+        warnings.warn(
+            f"bootstrap: {n_failed}/{B} ({failure_rate:.1%}) MLE fits failed; "
+            f"surviving samples may be biased toward well-behaved resamples",
+            RuntimeWarning, stacklevel=2,
+        )
+    return {"xi": xis, "_n_failed": n_failed, "_B": B,
+            **{f"rl_{T}": rls[T] for T in periods}}
 
 
 def ci(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:

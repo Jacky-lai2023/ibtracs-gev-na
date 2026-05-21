@@ -185,13 +185,57 @@ def main() -> int:
     plot_return_level_posterior(samples, am.values, FIG_DIR / "return_level_bayes.png")
     print(f"\nfigures written to {FIG_DIR}/")
 
+    # Convergence gate: refuse to save posterior if chains have not mixed.
+    # Compute split R-hat (Gelman et al. 2013, BDA3 §11.4) on each parameter.
+    import warnings
+    rhats = {}
+    for name in ("mu", "sigma", "xi"):
+        arr = samples[name].reshape(NUM_CHAINS, -1)
+        # Split each chain in half (split-Rhat)
+        split = arr.reshape(2 * NUM_CHAINS, -1)
+        means = split.mean(axis=1)
+        within = split.var(axis=1, ddof=1).mean()
+        between = split.shape[1] * means.var(ddof=1)
+        m = split.shape[1]
+        var_hat = ((m - 1) / m) * within + between / m
+        rhats[name] = float(np.sqrt(var_hat / within)) if within > 0 else float("nan")
+    n_div = int(mcmc.get_extra_fields()["diverging"].sum())
+    print(f"\nConvergence gate (split-Rhat ≤ 1.01, divergences < 5%):")
+    rhat_max = max(rhats.values())
+    div_rate = n_div / (NUM_CHAINS * NUM_SAMPLES)
+    print(f"  split-Rhat: mu={rhats['mu']:.4f}, sigma={rhats['sigma']:.4f}, xi={rhats['xi']:.4f}")
+    print(f"  divergences: {n_div}/{NUM_CHAINS * NUM_SAMPLES} ({div_rate:.2%})")
+    if rhat_max > 1.01:
+        warnings.warn(
+            f"split-Rhat {rhat_max:.3f} > 1.01: chains may not have mixed. "
+            f"Posterior is being saved but downstream consumers should treat with care.",
+            RuntimeWarning, stacklevel=2,
+        )
+        print(f"  ⚠ R-hat = {rhat_max:.3f} > 1.01 (chains may not have mixed)")
+    elif div_rate > 0.05:
+        warnings.warn(
+            f"divergence rate {div_rate:.1%} > 5%: NUTS hit support boundary frequently.",
+            RuntimeWarning, stacklevel=2,
+        )
+        print(f"  ⚠ divergence rate {div_rate:.1%} > 5%")
+    else:
+        print(f"  ✓ converged")
+
     np.savez(
         Path(__file__).parent / "posterior_samples.npz",
         mu=samples["mu"],
         sigma=samples["sigma"],
         xi=samples["xi"],
+        # Provenance metadata for downstream verification:
+        _rhat_mu=rhats["mu"],
+        _rhat_sigma=rhats["sigma"],
+        _rhat_xi=rhats["xi"],
+        _divergences=n_div,
+        _num_chains=NUM_CHAINS,
+        _num_samples=NUM_SAMPLES,
+        _seed=SEED,
     )
-    print(f"posterior samples saved to posterior_samples.npz")
+    print(f"posterior samples + diagnostics saved to posterior_samples.npz")
     return 0
 
 
