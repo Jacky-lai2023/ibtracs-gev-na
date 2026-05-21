@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import genextreme
+from scipy.stats import chi2, cramervonmises, genextreme, kstest, norm
 
 # === Constants ===
 DATA_PATH = Path(__file__).parent / "data" / "raw" / "ibtracs.NA.list.v04r01.csv"
@@ -91,7 +91,9 @@ def fit_gev_lmoments(am: pd.Series) -> dict:
     # In Hosking's k convention, ξ_EVT = -k (scipy uses c = +k)
     xi = -k
     sigma = (lam2 * k) / ((1 - 2 ** (-k)) * gamma(1 + k))
-    mu = lam1 - sigma * (gamma(1 + k) - 1) / k
+    # Hosking 1990 eq 14: mu = lam1 - sigma * (1 - Gamma(1+k)) / k
+    # (Earlier draft had the sign flipped; corrected against lmoments3 ground truth.)
+    mu = lam1 - sigma * (1 - gamma(1 + k)) / k
     return {"xi": xi, "mu": float(mu), "sigma": float(sigma), "_scipy_c": k}
 
 
@@ -124,6 +126,81 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
 def ci(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
     arr = arr[~np.isnan(arr)]
     return float(np.quantile(arr, alpha / 2)), float(np.quantile(arr, 1 - alpha / 2))
+
+
+def mann_kendall_trend(values: np.ndarray) -> dict:
+    """Mann-Kendall non-parametric trend test on a 1-D series.
+
+    H0: no monotonic trend. Reject for p < alpha.
+    Returns dict(tau, S, z, p_value).
+    """
+    n = len(values)
+    s = 0
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            s += np.sign(values[j] - values[i])
+    var_s = n * (n - 1) * (2 * n + 5) / 18
+    if s > 0:
+        z = (s - 1) / np.sqrt(var_s)
+    elif s < 0:
+        z = (s + 1) / np.sqrt(var_s)
+    else:
+        z = 0.0
+    p = 2 * (1 - norm.cdf(abs(z)))
+    tau = s / (n * (n - 1) / 2)
+    return {"tau": float(tau), "S": float(s), "z": float(z), "p_value": float(p)}
+
+
+def goodness_of_fit(am: pd.Series, params: dict, B_lilliefors: int = 500, seed: int = 20260521) -> dict:
+    """KS + Lilliefors-corrected KS + Cramer-von Mises tests for GEV adequacy.
+
+    The raw KS p-value is optimistic because the GEV parameters were estimated
+    from the same data; Lilliefors correction via parametric bootstrap fixes this.
+    """
+    x = am.values
+    c = params["_scipy_c"]
+    loc = params["mu"]
+    scale = params["sigma"]
+    ks_stat, ks_p_raw = kstest(x, "genextreme", args=(c, loc, scale))
+    cvm = cramervonmises(x, "genextreme", args=(c, loc, scale))
+    # Lilliefors via parametric bootstrap
+    rng = np.random.default_rng(seed)
+    null_ks = np.empty(B_lilliefors)
+    for b in range(B_lilliefors):
+        sim = genextreme.rvs(c, loc=loc, scale=scale, size=len(x), random_state=rng)
+        c_s, loc_s, scale_s = genextreme.fit(sim)
+        null_ks[b], _ = kstest(sim, "genextreme", args=(c_s, loc_s, scale_s))
+    ks_p_lilli = float((null_ks >= ks_stat).mean())
+    return {
+        "ks_stat": float(ks_stat),
+        "ks_p_raw": float(ks_p_raw),
+        "ks_p_lilliefors": ks_p_lilli,
+        "cvm_stat": float(cvm.statistic),
+        "cvm_p": float(cvm.pvalue),
+    }
+
+
+def cutoff_sensitivity(df_raw: pd.DataFrame, cutoffs: tuple = (1970, 1980, 1990, 2000)) -> list:
+    """Refit GEV with different SEASON cutoffs to test stability of the 1980 choice.
+
+    Expects df_raw post-`load_ibtracs` (before `clean`) so the SEASON filter
+    can be widened. Applies BASIN=='NA' and USA_WIND>0 filters internally.
+    """
+    df = df_raw[df_raw["BASIN"] == "NA"].copy()
+    df["SEASON"] = pd.to_numeric(df["SEASON"], errors="coerce")
+    df["USA_WIND"] = pd.to_numeric(df["USA_WIND"], errors="coerce")
+    df = df[df["USA_WIND"].notna() & (df["USA_WIND"] > 0)]
+    rows = []
+    for start in cutoffs:
+        sub = df[(df["SEASON"] >= start) & (df["SEASON"] <= SEASON_MAX)]
+        am = sub.groupby("SEASON")["USA_WIND"].max()
+        if len(am) < 10:
+            continue
+        c, loc, scale = genextreme.fit(am.values)
+        rl100 = float(genextreme.ppf(0.99, c, loc, scale))
+        rows.append({"cutoff": start, "n": int(len(am)), "xi": float(-c),
+                     "mu": float(loc), "sigma": float(scale), "rl_100": rl100})
+    return rows
 
 
 def plot_fit(am: pd.Series, params: dict, path: Path) -> None:
@@ -205,9 +282,9 @@ def main() -> int:
         return 1
     FIG_DIR.mkdir(exist_ok=True)
 
-    df = load_ibtracs(DATA_PATH)
-    print(f"raw rows: {len(df):,}")
-    df = clean(df)
+    df_raw = load_ibtracs(DATA_PATH)
+    print(f"raw rows: {len(df_raw):,}")
+    df = clean(df_raw)
     print(f"clean rows (NA, {SEASON_MIN}-{SEASON_MAX}, USA_WIND>0): {len(df):,}")
     am = annual_maxima(df)
     print(f"annual maxima ({len(am)} seasons): min={am.min():.0f} kt, "
@@ -219,11 +296,31 @@ def main() -> int:
     print()
     print(report(am, params, boot))
     print()
-    print("L-moments (Hosking 1985) — small-sample-robust sanity check:")
+    print("L-moments (Hosking 1990) — small-sample-robust sanity check:")
     print(f"  xi    = {params_lm['xi']:+.4f}")
     print(f"  mu    = {params_lm['mu']:.2f} kt")
     print(f"  sigma = {params_lm['sigma']:.2f} kt")
     print(f"  RL_100 = {return_level(params_lm, 100):.1f} kt")
+    print()
+    print("Mann-Kendall trend test on annual maxima (H0: stationary):")
+    mk = mann_kendall_trend(am.values)
+    print(f"  Kendall tau = {mk['tau']:+.4f}, z = {mk['z']:+.3f}, p = {mk['p_value']:.4f}")
+    verdict = "REJECT stationarity (trend significant)" if mk["p_value"] < 0.05 else "fail to reject (stationary plausible)"
+    print(f"  → {verdict} at alpha=0.05")
+    print()
+    print("Goodness-of-fit (three tests; H0: data drawn from fitted GEV):")
+    gof = goodness_of_fit(am, params)
+    print(f"  Kolmogorov-Smirnov (raw):          D = {gof['ks_stat']:.4f}, p = {gof['ks_p_raw']:.4f}")
+    print(f"  Lilliefors-corrected KS (B=500):                       p = {gof['ks_p_lilliefors']:.4f}")
+    print(f"  Cramer-von Mises:                  W = {gof['cvm_stat']:.4f}, p = {gof['cvm_p']:.4f}")
+    gof_pass = gof["ks_p_lilliefors"] > 0.05 and gof["cvm_p"] > 0.05
+    print(f"  → GEV adequacy: {'supported' if gof_pass else 'REJECTED'} at alpha=0.05")
+    print()
+    print(f"Cutoff sensitivity (xi stability across SEASON start years):")
+    print(f"  {'cutoff':>6} | {'n':>3} | {'xi':>9} | {'RL_100 (kt)':>12}")
+    for r in cutoff_sensitivity(df_raw):
+        marker = " ← current" if r["cutoff"] == SEASON_MIN else ""
+        print(f"  {r['cutoff']:>6} | {r['n']:>3} | {r['xi']:>+9.4f} | {r['rl_100']:>12.2f}{marker}")
 
     plot_fit(am, params, FIG_DIR / "gev_fit.png")
     plot_return_level(am, params, boot, FIG_DIR / "return_level.png")
