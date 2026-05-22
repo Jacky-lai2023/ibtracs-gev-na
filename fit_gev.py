@@ -94,11 +94,17 @@ def fit_gev_lmoments(am: pd.Series) -> dict:
     c = 2 / (3 + t3) - log(2) / log(3)
     k = 7.8590 * c + 2.9554 * c * c
     xi = -k  # convert to EVT convention (xi<0 -> Weibull / bounded above)
-    sigma = (lam2 * k) / ((1 - 2 ** (-k)) * gamma(1 + k))
-    # Location parameter mu = lam1 - sigma * (1 - Gamma(1+k)) / k.
-    # (Earlier draft had the sign flipped on the gamma term; corrected against
-    # the lmoments3 reference implementation and verified by E[X] = lam1.)
-    mu = lam1 - sigma * (1 - gamma(1 + k)) / k
+    if abs(k) < 1e-6:
+        # Gumbel limit (k -> 0): closed form from Hosking 1990 Table 1.
+        # Reachable when sample L-skewness t3 ≈ log(2)/log(3) − 1/3 ≈ 0.1699.
+        sigma = lam2 / log(2)
+        mu = lam1 - sigma * 0.5772156649015329  # Euler-Mascheroni
+    else:
+        sigma = (lam2 * k) / ((1 - 2 ** (-k)) * gamma(1 + k))
+        # Location parameter mu = lam1 - sigma * (1 - Gamma(1+k)) / k.
+        # (Earlier draft had the sign flipped on the gamma term; corrected against
+        # the lmoments3 reference implementation and verified by E[X] = lam1.)
+        mu = lam1 - sigma * (1 - gamma(1 + k)) / k
     # _scipy_c stores k = -xi for direct use with scipy.stats.genextreme,
     # which uses the c = -xi_EVT parameterisation.
     return {"xi": xi, "mu": float(mu), "sigma": float(sigma), "_scipy_c": k}
@@ -145,6 +151,8 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
 
 def ci(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
     arr = arr[~np.isnan(arr)]
+    if len(arr) == 0:
+        return float("nan"), float("nan")
     return float(np.quantile(arr, alpha / 2)), float(np.quantile(arr, 1 - alpha / 2))
 
 
@@ -318,7 +326,7 @@ def main() -> int:
     if not DATA_PATH.exists():
         print(f"missing {DATA_PATH} — run: python download.py")
         return 1
-    FIG_DIR.mkdir(exist_ok=True)
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     df_raw = load_ibtracs(DATA_PATH)
     print(f"raw rows: {len(df_raw):,}")

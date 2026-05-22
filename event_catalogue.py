@@ -14,6 +14,7 @@ Prerequisite: run bayesian_gev.py first (produces posterior_samples.npz).
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -49,11 +50,12 @@ def extract_iconic_peaks(df_clean: pd.DataFrame) -> pd.DataFrame:
             continue
         rows.append({"name": name, "year": year, "peak_kt": float(sub["USA_WIND"].max())})
     if missing:
-        import warnings
         warnings.warn(
             f"ICONIC_STORMS not found in IBTrACS: {', '.join(missing)}",
             RuntimeWarning, stacklevel=2,
         )
+    if not rows:
+        raise RuntimeError("no iconic storms matched IBTrACS — check NAME column format")
     return pd.DataFrame(rows).sort_values("peak_kt", ascending=False).reset_index(drop=True)
 
 
@@ -69,7 +71,6 @@ def sample_catalogue(samples: dict, years: int, seed: int) -> np.ndarray:
     # scipy.stats.genextreme uses c = -xi_EVT, so pass -xi.
     cat = genextreme.rvs(-xi, loc=mu, scale=sigma, random_state=rng)
     if not np.isfinite(cat).all():
-        import warnings
         n_bad = int((~np.isfinite(cat)).sum())
         warnings.warn(
             f"posterior-predictive catalogue has {n_bad} non-finite samples "
@@ -133,27 +134,41 @@ def saffir_simpson_ppc(observed: np.ndarray, synthetic: np.ndarray) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def summarise_rp(rp_draws: np.ndarray, storm_label: str | None = None) -> tuple[float, float, float]:
-    """Median + 95% CrI of return periods. Warns if all draws are infinite."""
+def summarise_rp(rp_draws: np.ndarray, storm_label: str | None = None,
+                 alpha: float = 0.05) -> tuple[float, float, float]:
+    """Median + (1-alpha) CrI of return periods, treating posterior draws beyond
+    the GEV upper support as RP=+inf rather than silently discarding them.
+
+    Quantiles are computed on the joint (finite, +inf) distribution: if the
+    target quantile `q` falls into the inf mass at the top, the answer is +inf;
+    otherwise we rescale q into the finite-mass portion. Without this, the
+    upper CrI is biased low whenever `inf_frac > alpha/2` — a real concern for
+    storms near the posterior upper support (e.g. Allen 1980 at 165 kt).
+    """
     finite = rp_draws[np.isfinite(rp_draws)]
+    n_total = len(rp_draws)
     if len(finite) == 0:
-        import warnings
         msg = "all posterior draws give infinite return period"
         if storm_label:
             msg = f"{storm_label}: {msg} (intensity beyond GEV support for every draw)"
         warnings.warn(msg, RuntimeWarning, stacklevel=2)
         return float("inf"), float("inf"), float("inf")
-    inf_frac = 1.0 - len(finite) / len(rp_draws)
+    inf_frac = 1.0 - len(finite) / n_total
     if inf_frac > 0.5 and storm_label:
-        import warnings
         warnings.warn(
             f"{storm_label}: {inf_frac:.1%} of posterior draws give infinite return period",
             RuntimeWarning, stacklevel=2,
         )
-    med = float(np.median(finite))
-    lo = float(np.quantile(finite, 0.025))
-    hi = float(np.quantile(finite, 0.975))
-    return med, lo, hi
+
+    def quantile_with_inf(q: float) -> float:
+        # If the target quantile sits in the inf tail at the top of the joint
+        # distribution, the answer is inf; otherwise rescale q into the finite
+        # portion (which occupies the first (1 - inf_frac) of total mass).
+        if q >= 1.0 - inf_frac:
+            return float("inf")
+        return float(np.quantile(finite, q / (1.0 - inf_frac)))
+
+    return quantile_with_inf(0.5), quantile_with_inf(alpha / 2), quantile_with_inf(1.0 - alpha / 2)
 
 
 def plot_catalogue(catalogue: np.ndarray, storms: pd.DataFrame, path: Path) -> None:
@@ -193,9 +208,20 @@ def main() -> int:
         return 1
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    samples_raw = np.load(POSTERIOR_PATH)
-    samples = {k: samples_raw[k] for k in ("mu", "sigma", "xi")}
-    print(f"loaded {len(samples['mu']):,} posterior samples")
+    # allow_pickle=False: posterior_samples.npz contains only numeric arrays;
+    # disabling the unsafe deserialiser is defensive against tampered files.
+    _ALLOW_PICKLE = False  # noqa: redefined here for explicit intent
+    with np.load(POSTERIOR_PATH, allow_pickle=_ALLOW_PICKLE) as samples_raw:
+        samples = {k: np.asarray(samples_raw[k]) for k in ("mu", "sigma", "xi")}
+        rhats = {k: float(samples_raw[f"_rhat_{k}"]) for k in ("mu", "sigma", "xi")}
+    print(f"loaded {len(samples['mu']):,} posterior samples "
+          f"(R-hat: mu={rhats['mu']:.3f}, sigma={rhats['sigma']:.3f}, xi={rhats['xi']:.3f})")
+    if max(rhats.values()) > 1.01:
+        warnings.warn(
+            f"posterior_samples.npz reports R-hat > 1.01: {rhats}. "
+            f"Catalogue is being built on possibly-unmixed chains.",
+            RuntimeWarning, stacklevel=2,
+        )
 
     # 1. Synthetic catalogue
     cat = sample_catalogue(samples, CATALOGUE_YEARS, SEED)
@@ -224,7 +250,9 @@ def main() -> int:
         rp_post = posterior_return_period(s["peak_kt"], samples)
         med, lo, hi = summarise_rp(rp_post, storm_label=f"{s['name']} ({int(s['year'])})")
         emp_count = int((cat >= s["peak_kt"]).sum())
-        rp_empirical = CATALOGUE_YEARS / emp_count if emp_count > 0 else float("inf")
+        # Use len(cat), not CATALOGUE_YEARS — if sample_catalogue dropped any
+        # non-finite samples, len(cat) is the true denominator.
+        rp_empirical = len(cat) / emp_count if emp_count > 0 else float("inf")
         rows.append({
             "Storm": f"{s['name']} ({int(s['year'])})",
             "Peak USA_WIND (kt)": int(s["peak_kt"]),

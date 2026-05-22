@@ -160,7 +160,7 @@ def main() -> int:
     if not DATA_PATH.exists():
         print(f"missing {DATA_PATH} -- run: python download.py")
         return 1
-    FIG_DIR.mkdir(exist_ok=True)
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     df = load_ibtracs(DATA_PATH)
     am = annual_maxima(clean(df))
