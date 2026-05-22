@@ -91,18 +91,31 @@ def run_nuts(am_values: np.ndarray, seed: int = SEED) -> MCMC:
         progress_bar=True,
         chain_method="sequential",  # safer than parallel on small CPU box
     )
-    mcmc.run(jax.random.PRNGKey(seed), y=jnp.asarray(am_values, dtype=jnp.float32))
+    # extra_fields=("diverging",) makes the divergence count explicit rather
+    # than relying on the numpyro default (which can change across versions).
+    mcmc.run(jax.random.PRNGKey(seed), y=jnp.asarray(am_values, dtype=jnp.float32),
+             extra_fields=("diverging",))
     return mcmc
 
 
 def posterior_return_level(samples: dict, T: float) -> np.ndarray:
-    """Posterior of T-year return level: q = mu + sigma * ((-log(1-1/T))^(-xi) - 1) / xi."""
+    """Posterior of T-year return level.
+
+    For ξ ≠ 0:  q = μ + σ · ((-log p)^(-ξ) - 1) / ξ
+    Gumbel limit (ξ → 0):  q = μ - σ · log(-log p)
+    The explicit Gumbel branch mirrors the one in `gev_log_prob` so the
+    sampler and post-processing handle |ξ| ≲ 1e-6 consistently.
+    """
     mu = samples["mu"]
     sigma = samples["sigma"]
     xi = samples["xi"]
     p = 1.0 - 1.0 / T
-    inner = (-np.log(p)) ** (-xi)
-    return mu + sigma * (inner - 1.0) / xi
+    log_log = np.log(-np.log(p))
+    safe_xi = np.where(np.abs(xi) > 1e-6, xi, 1e-6)
+    gev_reduced = ((-np.log(p)) ** (-safe_xi) - 1.0) / safe_xi
+    gumbel_reduced = -log_log
+    reduced = np.where(np.abs(xi) > 1e-6, gev_reduced, gumbel_reduced)
+    return mu + sigma * reduced
 
 
 def summarise(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float, float]:
@@ -183,6 +196,19 @@ def main() -> int:
     mcmc = run_nuts(am.values)
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
     samples_by_chain = {k: np.asarray(v) for k, v in mcmc.get_samples(group_by_chain=True).items()}
+    expected_flat = NUM_CHAINS * NUM_SAMPLES
+    for name in ("mu", "sigma", "xi"):
+        if len(samples[name]) != expected_flat:
+            raise RuntimeError(
+                f"NUTS produced {len(samples[name])} samples for {name!r}, expected "
+                f"{expected_flat} ({NUM_CHAINS} chains × {NUM_SAMPLES}). MCMC did not "
+                f"complete cleanly — inspect numpyro output above."
+            )
+        if samples_by_chain[name].shape != (NUM_CHAINS, NUM_SAMPLES):
+            raise RuntimeError(
+                f"NUTS returned unexpected per-chain shape for {name!r}: "
+                f"{samples_by_chain[name].shape}, expected ({NUM_CHAINS}, {NUM_SAMPLES})."
+            )
 
     print()
     print("=" * 60)

@@ -57,8 +57,15 @@ def annual_maxima(df: pd.DataFrame) -> pd.Series:
 
 
 def fit_gev(am: pd.Series) -> dict:
-    """scipy parameterisation: pdf uses (c, loc, scale) with c = -xi."""
+    """scipy parameterisation: pdf uses (c, loc, scale) with c = -xi.
+
+    Raises ValueError on degenerate fits (non-finite or non-positive scale) so
+    callers using `_FIT_ERRORS` can count and surface them rather than silently
+    propagating NaN through return-level computation.
+    """
     c, loc, scale = genextreme.fit(am.values)
+    if not (np.isfinite(c) and np.isfinite(loc) and np.isfinite(scale) and scale > 0):
+        raise ValueError(f"genextreme.fit returned degenerate params: c={c}, loc={loc}, scale={scale}")
     return {"xi": -c, "mu": float(loc), "sigma": float(scale), "_scipy_c": c}
 
 

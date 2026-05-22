@@ -83,7 +83,13 @@ def sample_catalogue(samples: dict, years: int, seed: int) -> np.ndarray:
 
 
 def posterior_return_period(intensity: float, samples: dict) -> np.ndarray:
-    """Per posterior draw: 1 / P(annual_max >= intensity); inf where intensity exceeds support."""
+    """Per posterior draw: 1 / P(annual_max >= intensity); inf where intensity exceeds support.
+
+    Handles the ξ→0 Gumbel limit via an explicit branch, mirroring the
+    log-density branch in bayesian_gev.gev_log_prob. Without this, draws with
+    |ξ| ≲ 1e-6 would divide by zero in `safe_arg ** (-1/ξ)` and silently
+    collapse to CDF=0 or 1.
+    """
     mu = samples["mu"]
     sigma = samples["sigma"]
     xi = samples["xi"]
@@ -91,7 +97,10 @@ def posterior_return_period(intensity: float, samples: dict) -> np.ndarray:
     arg = 1.0 + xi * z
     valid = arg > 1e-9
     safe_arg = np.where(valid, arg, 1e-9)
-    cdf = np.exp(-safe_arg ** (-1.0 / xi))
+    safe_xi = np.where(np.abs(xi) > 1e-6, xi, 1e-6)
+    cdf_gev = np.exp(-safe_arg ** (-1.0 / safe_xi))
+    cdf_gumbel = np.exp(-np.exp(-z))
+    cdf = np.where(np.abs(xi) > 1e-6, cdf_gev, cdf_gumbel)
     cdf = np.where(valid, cdf, np.where(xi < 0, 1.0, 0.0))
     p_exceed = 1.0 - cdf
     return np.where(p_exceed > 1e-9, 1.0 / p_exceed, np.inf)
@@ -213,8 +222,7 @@ def main() -> int:
 
     # allow_pickle=False: posterior_samples.npz contains only numeric arrays;
     # disabling the unsafe deserialiser is defensive against tampered files.
-    _ALLOW_PICKLE = False  # noqa: redefined here for explicit intent
-    with np.load(POSTERIOR_PATH, allow_pickle=_ALLOW_PICKLE) as samples_raw:
+    with np.load(POSTERIOR_PATH, allow_pickle=False) as samples_raw:
         try:
             samples = {k: np.asarray(samples_raw[k]) for k in ("mu", "sigma", "xi")}
             rhats = {k: float(samples_raw[f"_rhat_{k}"]) for k in ("mu", "sigma", "xi")}
