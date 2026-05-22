@@ -246,7 +246,9 @@ def main() -> int:
         _seed=SEED,
     )
     print(f"posterior samples + diagnostics saved to posterior_samples.npz")
-    return 0
+    # Non-zero exit if diagnostics fail so CI/automation can detect.
+    # The posterior is still saved (with provenance) for inspection.
+    return 0 if rhat_max <= 1.01 and div_rate <= 0.05 else 2
 
 
 if __name__ == "__main__":

@@ -147,16 +147,18 @@ def summarise_rp(rp_draws: np.ndarray, storm_label: str | None = None,
     """
     finite = rp_draws[np.isfinite(rp_draws)]
     n_total = len(rp_draws)
+    label = storm_label or "<unnamed>"
     if len(finite) == 0:
-        msg = "all posterior draws give infinite return period"
-        if storm_label:
-            msg = f"{storm_label}: {msg} (intensity beyond GEV support for every draw)"
-        warnings.warn(msg, RuntimeWarning, stacklevel=2)
+        warnings.warn(
+            f"{label}: all posterior draws give infinite return period "
+            f"(intensity beyond GEV support for every draw)",
+            RuntimeWarning, stacklevel=2,
+        )
         return float("inf"), float("inf"), float("inf")
     inf_frac = 1.0 - len(finite) / n_total
-    if inf_frac > 0.5 and storm_label:
+    if inf_frac > 0.5:
         warnings.warn(
-            f"{storm_label}: {inf_frac:.1%} of posterior draws give infinite return period",
+            f"{label}: {inf_frac:.1%} of posterior draws give infinite return period",
             RuntimeWarning, stacklevel=2,
         )
 

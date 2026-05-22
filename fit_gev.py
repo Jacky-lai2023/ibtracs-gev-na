@@ -123,6 +123,9 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
     n = len(am)
     vals = am.values
     xis = np.empty(B)
+    mus = np.empty(B)
+    sigmas = np.empty(B)
+    cs = np.empty(B)  # scipy c = -xi convention, kept for vectorised ppf later
     rls = {T: np.empty(B) for T in periods}
     n_failed = 0
     for b in range(B):
@@ -130,12 +133,15 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
         try:
             p = fit_gev(pd.Series(resample))
         except _FIT_ERRORS:
-            xis[b] = np.nan
+            xis[b] = mus[b] = sigmas[b] = cs[b] = np.nan
             for T in periods:
                 rls[T][b] = np.nan
             n_failed += 1
             continue
         xis[b] = p["xi"]
+        mus[b] = p["mu"]
+        sigmas[b] = p["sigma"]
+        cs[b] = p["_scipy_c"]
         for T in periods:
             rls[T][b] = return_level(p, T)
     failure_rate = n_failed / B
@@ -145,7 +151,8 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
             f"surviving samples may be biased toward well-behaved resamples",
             RuntimeWarning, stacklevel=2,
         )
-    return {"xi": xis, "_n_failed": n_failed, "_B": B,
+    return {"xi": xis, "mu": mus, "sigma": sigmas, "_scipy_c": cs,
+            "_n_failed": n_failed, "_B": B,
             **{f"rl_{T}": rls[T] for T in periods}}
 
 
@@ -287,15 +294,23 @@ def plot_return_level(am: pd.Series, params: dict, boot: dict, path: Path) -> No
     import matplotlib.pyplot as plt
     Ts = np.logspace(np.log10(2), np.log10(500), 60)
     rl_point = [return_level(params, T) for T in Ts]
-    # Bootstrap band per T (recompute on the fly using stored xis is expensive;
-    # instead interpolate between the periods we stored)
-    stored_T = sorted(int(k.split("_")[1]) for k in boot if k.startswith("rl_"))
-    lo = [ci(boot[f"rl_{T}"])[0] for T in stored_T]
-    hi = [ci(boot[f"rl_{T}"])[1] for T in stored_T]
+    # Compute bootstrap CI at every Ts grid point from stored per-resample params,
+    # so the shaded band tracks the MLE curve exactly instead of linearly
+    # interpolating across the 8 stored return-period checkpoints.
+    valid = ~np.isnan(boot["_scipy_c"])
+    cs = boot["_scipy_c"][valid]
+    mus = boot["mu"][valid]
+    sigmas = boot["sigma"][valid]
+    lo = np.empty_like(Ts)
+    hi = np.empty_like(Ts)
+    for k, T in enumerate(Ts):
+        rls_T = genextreme.ppf(1 - 1 / T, cs, mus, sigmas)
+        lo[k] = np.quantile(rls_T, 0.025)
+        hi[k] = np.quantile(rls_T, 0.975)
 
     fig, ax = plt.subplots(figsize=(7, 4.2))
     ax.plot(Ts, rl_point, color="#1F3A5F", lw=2.2, label="MLE return level")
-    ax.fill_between(stored_T, lo, hi, alpha=0.25, color="#5B8FB9",
+    ax.fill_between(Ts, lo, hi, alpha=0.25, color="#5B8FB9",
                     label="Bootstrap 95% CI")
     # Empirical points (Weibull plotting positions)
     n = len(am)
