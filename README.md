@@ -2,25 +2,25 @@
 
 > **Extreme-value analysis and posterior-predictive event catalogue for North Atlantic tropical cyclone annual maximum 1-minute sustained wind, IBTrACS 1980–2024.**
 
-Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.73 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
+Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.29 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
 
 ---
 
 ## Headline result
 
-**Posterior median 100-year return level: 171 kt (95% credible interval [162, 195]).**
+**Posterior median 100-year return level: 171 kt (95% credible interval [162, 194]).**
 
 | Estimator | ξ | μ (kt) | σ (kt) | RL₁₀₀ (kt) | 95% interval |
 |---|---:|---:|---:|---:|---|
 | MLE | −0.470 | 123.2 | 22.2 | 165 | [159, 183] bootstrap (see caveats) |
 | L-moments (Hosking 1990) | −0.377 | 122.0 | 22.3 | 171 | — |
-| **Bayesian NUTS (primary)** | **−0.342** | **121.4** | **21.5** | **171** | **[162, 195] credible** |
+| **Bayesian NUTS (primary)** | **−0.342** | **121.3** | **21.5** | **171** | **[162, 194] credible** |
 
 The three estimators agree within a tight **165–171 kt window**, consistent with the NA basin historic peaks Allen 1980 (165 kt) and Wilma 2005 / Gilbert 1988 / Dorian 2019 (160 kt).
 
 | Historic storm group | Peak USA_WIND (kt) | Posterior RP (yr) | 95% CrI |
 |---|---:|---:|---|
-| Allen (1980) | 165 | 33 | [10, 378] |
+| Allen (1980) | 165 | 34 | [10, 401] |
 | Gilbert (1988) / Wilma (2005) / Dorian (2019) | 160 | 17 | [7, 54] |
 | Mitch (1998) / Rita (2005) / Irma (2017) | 155 | 10 | [5, 21] |
 | Andrew (1992) / Katrina (2005) / Maria (2017) / Dean (2007) | 150 | 6 | [4, 11] |
@@ -60,7 +60,7 @@ All outputs land in `figures/` plus stdout reports.
      - `μ ∼ Normal(130, 50)`
      - `σ ∼ HalfNormal(30)`
      - `ξ ∼ Normal(−0.2, 0.15)` — centred on the TC-EVT literature suggestion of a bounded upper tail.
-   - 4 chains × (1000 warmup + 2000 samples); R-hat = 1.00 for all parameters; ESS = 2.5k–4k. Divergence rate ~2.6%, addressed via target_accept = 0.99 and documented in Limitations.
+   - 4 chains × (1000 warmup + 2000 samples); R-hat = 1.00 for all parameters; ESS = 2.2k–3k. Divergence rate ~1.6% (with explicit Gumbel-limit branch in the JAX log-density), addressed via target_accept = 0.99 and documented in Limitations.
 
 4. **Stationarity test.** Mann-Kendall non-parametric trend on the annual maxima:
    ```
@@ -103,14 +103,14 @@ All outputs land in `figures/` plus stdout reports.
 
    | Band | Observed % | Synthetic % | |diff| (pp) |
    |---|---:|---:|---:|
-   | TS 34–63 kt | 0.00 | 0.21 | 0.21 |
-   | Cat 1 64–82 kt | 2.22 | 1.69 | 0.53 |
-   | Cat 2 83–95 kt | 4.44 | 5.17 | 0.73 |
-   | Cat 3 96–112 kt | 15.56 | 16.08 | 0.52 |
-   | Cat 4 113–136 kt | 42.22 | 40.49 | 1.73 |
-   | **Cat 5 ≥ 137 kt** | **35.56** | **36.36** | **0.80** |
+   | TS 34–63 kt | 0.00 | 0.19 | 0.19 |
+   | Cat 1 64–82 kt | 2.22 | 1.73 | 0.49 |
+   | Cat 2 83–95 kt | 4.44 | 4.96 | 0.52 |
+   | Cat 3 96–112 kt | 15.56 | 16.25 | 0.69 |
+   | Cat 4 113–136 kt | 42.22 | 40.93 | 1.29 |
+   | **Cat 5 ≥ 137 kt** | **35.56** | **35.94** | **0.38** |
 
-   Maximum deviation 1.73 pp; mean 0.75 pp. The Bayesian GEV reproduces the data-generating distribution at the discretisation most relevant to insurance applications.
+   Maximum deviation 1.29 pp; mean 0.59 pp. The Bayesian GEV reproduces the data-generating distribution at the discretisation most relevant to insurance applications.
 
 10. **Named-storm return periods.** For each iconic storm 1980–2024, compute exceedance probability `P(annual_max ≥ storm_peak)` analytically per posterior sample → posterior distribution of return periods.
 
@@ -129,7 +129,7 @@ Empirical Weibull plotting positions ((n + 1) / (n + 1 − rank)) overlay the pa
 - **Non-stationarity.** The Mann-Kendall trend test on annual maxima rejects stationarity (p = 0.02). The fitted GEV(μ, σ, ξ) is treated as a working approximation; production work should fit non-stationary GEV with covariate-dependent μ (year, ENSO ONI, SST anomaly). Stationarity assumption is a known limitation, not an oversight.
 - **Small-sample MLE tail-bias.** With n = 45, MLE ξ is unstable: bootstrap 95% CI is [−4.5, −0.1]; 9.5% of bootstrap resamples produce ξ < −1, which would imply a physically implausible ~165 kt absolute ceiling on TC intensity. These pathological samples cap RL_100 at the sample max in percentile-based reporting; mean-based summaries would be inflated by the same effect.
 - **Bootstrap CI does not fully converge** even at B = 5000 (97.5% percentile varies 183–193 kt with seed and B). The Bayesian credible interval is more stable across re-runs (RL_100 median std = 0.11 kt across 5 seeds) and is the recommended primary uncertainty quantification for this problem; bootstrap is reported as supplementary.
-- **GEV support-boundary divergences in NUTS.** The GEV likelihood is −∞ outside `1 + ξ(y−μ)/σ > 0`, creating a sharp boundary that NUTS occasionally crosses (~2.6% divergence rate). Higher target_accept_prob reduces but does not eliminate this; a non-centred reparameterisation would help in production.
+- **GEV support-boundary divergences in NUTS.** The GEV likelihood is −∞ outside `1 + ξ(y−μ)/σ > 0`, creating a sharp boundary that NUTS occasionally crosses (~1.6% divergence rate; the explicit Gumbel-limit branch removes a second source of gradient instability around ξ ≈ 0). Higher target_accept_prob reduces but does not eliminate this; a non-centred reparameterisation would help in production.
 - **Asymptotic SE invalid.** Fisher information gives SE for ξ ≈ 0.12; non-parametric bootstrap SE is 1.39 (≈ 11.6× larger). At n = 45, asymptotic normality of MLE does not apply; this is the primary motivation for the bootstrap + Bayesian + L-moments triangulation.
 - **All NA tracks, not landfalls.** Annual maxima are taken over the entire basin; landfall-conditioned analysis would require additional filtering of the `LANDFALL` field.
 - **No declustering.** Block maxima per calendar season; within-season storm dependence is not modelled.

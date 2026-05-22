@@ -52,18 +52,25 @@ def gev_log_prob(y: jnp.ndarray, mu: float, sigma: float, xi: float) -> jnp.ndar
     """GEV log-density. Support: 1 + xi*(y-mu)/sigma > 0; otherwise -inf.
 
     Convention: xi<0 -> Weibull (bounded upper tail), xi>0 -> Frechet,
-    xi=0 -> Gumbel (handled numerically via small offset; NUTS gradients
-    keep |xi| > 0 in practice).
+    xi=0 -> Gumbel limit (closed-form branch below). The Gumbel branch
+    keeps the log-density and its gradient finite when NUTS visits the
+    region |xi| < 1e-6 (rare under the Normal(-0.2, 0.15) prior but not
+    measure-zero in float32).
     """
     z = (y - mu) / sigma
     arg = 1 + xi * z
     valid = arg > 1e-9
     safe_arg = jnp.where(valid, arg, 1.0)
-    log_density = (
+    # Use a safe xi away from 0 inside the GEV branch so the divide-by-xi
+    # never produces NaN gradients; the Gumbel branch handles xi≈0.
+    safe_xi = jnp.where(jnp.abs(xi) > 1e-6, xi, 1e-6)
+    gev_ld = (
         -jnp.log(sigma)
-        - (1.0 + 1.0 / xi) * jnp.log(safe_arg)
-        - safe_arg ** (-1.0 / xi)
+        - (1.0 + 1.0 / safe_xi) * jnp.log(safe_arg)
+        - safe_arg ** (-1.0 / safe_xi)
     )
+    gumbel_ld = -jnp.log(sigma) - z - jnp.exp(-z)
+    log_density = jnp.where(jnp.abs(xi) > 1e-6, gev_ld, gumbel_ld)
     return jnp.where(valid, log_density, -jnp.inf)
 
 
@@ -160,6 +167,9 @@ def plot_return_level_posterior(samples: dict, am: np.ndarray, path: Path) -> No
 
 
 def main() -> int:
+    # Validate split-Rhat precondition up front so we fail in 0 s rather than
+    # after the full ~3 s MCMC run.
+    assert NUM_SAMPLES % 2 == 0, f"NUM_SAMPLES must be even for split-Rhat; got {NUM_SAMPLES}"
     if not DATA_PATH.exists():
         print(f"missing {DATA_PATH} -- run: python download.py")
         return 1
@@ -196,8 +206,8 @@ def main() -> int:
     # Convergence diagnostics: split-Rhat (Gelman et al. 2013, BDA3 §11.4) +
     # divergence rate. We report and warn but do not abort — the posterior is
     # still saved with provenance so downstream consumers can inspect the
-    # diagnostics in the .npz header.
-    assert NUM_SAMPLES % 2 == 0, f"NUM_SAMPLES must be even for split-Rhat; got {NUM_SAMPLES}"
+    # diagnostics in the .npz header. NUM_SAMPLES-even precondition for the
+    # split-Rhat reshape is checked at the top of main().
     rhats = {}
     for name in ("mu", "sigma", "xi"):
         arr = samples_by_chain[name]  # (NUM_CHAINS, NUM_SAMPLES), no reshape needed
