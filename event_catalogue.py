@@ -60,7 +60,8 @@ def extract_iconic_peaks(df_clean: pd.DataFrame) -> pd.DataFrame:
 
 
 def sample_catalogue(samples: dict, years: int, seed: int) -> np.ndarray:
-    """Posterior predictive: cycle through posterior draws to generate `years` synthetic maxima."""
+    """Posterior predictive: sample (with replacement) from posterior draws to generate
+    `years` synthetic annual maxima, propagating parameter uncertainty into the catalogue."""
     rng = np.random.default_rng(seed)
     n_post = len(samples["mu"])
     idx = rng.integers(0, n_post, size=years)

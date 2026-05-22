@@ -2,7 +2,7 @@
 
 > **Extreme-value analysis and posterior-predictive event catalogue for North Atlantic tropical cyclone annual maximum 1-minute sustained wind, IBTrACS 1980–2024.**
 
-Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.77 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
+Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.73 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
 
 ---
 
@@ -14,7 +14,7 @@ Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return
 |---|---:|---:|---:|---:|---|
 | MLE | −0.470 | 123.2 | 22.2 | 165 | [159, 183] bootstrap (see caveats) |
 | L-moments (Hosking 1990) | −0.377 | 122.0 | 22.3 | 171 | — |
-| **Bayesian NUTS (primary)** | **−0.348** | **121.5** | **21.5** | **171** | **[162, 195] credible** |
+| **Bayesian NUTS (primary)** | **−0.342** | **121.4** | **21.5** | **171** | **[162, 195] credible** |
 
 The three estimators agree within a tight **165–171 kt window**, consistent with the NA basin historic peaks Allen 1980 (165 kt) and Wilma 2005 / Gilbert 1988 / Dorian 2019 (160 kt).
 
