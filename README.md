@@ -82,11 +82,16 @@ All outputs land in `figures/` plus stdout reports.
 
    | Test | Statistic | p-value | Verdict |
    |---|---:|---:|---|
-   | Kolmogorov-Smirnov (raw) | D = 0.090 | 0.83 | fail to reject |
+   | Kolmogorov-Smirnov (raw, scipy known-params null) | D = 0.090 | 0.83 | optimistic — see below |
    | Lilliefors-corrected KS (parametric bootstrap B=500) | D = 0.090 | 0.50 | fail to reject |
-   | Cramer-von Mises | W² = 0.049 | 0.88 | fail to reject |
+   | Cramer-von Mises (raw, scipy known-params null) | W² = 0.049 | 0.88 | optimistic — see below |
+   | Cramer-von Mises (parametric bootstrap B=500) | W² = 0.049 | 0.52 | fail to reject |
 
-   All three tests support GEV-family adequacy.
+   scipy's `kstest` and `cramervonmises` p-values use the null distribution that
+   assumes GEV parameters are known a priori; with MLE plug-in parameters both
+   p-values are anti-conservative, so the same Lilliefors-style parametric-
+   bootstrap correction is applied to both. All four tests support GEV-family
+   adequacy at α = 0.05.
 
 7. **Return levels.** Closed-form GEV quantile per posterior sample; report posterior median + 2.5/97.5 quantiles.
 
@@ -96,7 +101,7 @@ All outputs land in `figures/` plus stdout reports.
 
    | Band | Observed % | Synthetic % | |diff| (pp) |
    |---|---:|---:|---:|
-   | TS 34–63 kt | 0.00 | 0.27 | 0.27 |
+   | TS 34–63 kt | 0.00 | 0.26 | 0.26 |
    | Cat 1 64–82 kt | 2.22 | 1.72 | 0.50 |
    | Cat 2 83–95 kt | 4.44 | 4.93 | 0.49 |
    | Cat 3 96–112 kt | 15.56 | 16.25 | 0.69 |
@@ -123,7 +128,7 @@ Empirical Weibull plotting positions ((n + 1) / (n + 1 − rank)) overlay the pa
 - **Small-sample MLE tail-bias.** With n = 45, MLE ξ is unstable: bootstrap 95% CI is [−4.5, −0.1]; 9.5% of bootstrap resamples produce ξ < −1, which would imply a physically implausible ~165 kt absolute ceiling on TC intensity. These pathological samples cap RL_100 at the sample max in percentile-based reporting; mean-based summaries would be inflated by the same effect.
 - **Bootstrap CI does not fully converge** even at B = 5000 (97.5% percentile varies 183–193 kt with seed and B). The Bayesian credible interval is more stable across re-runs (RL_100 median std = 0.11 kt across 5 seeds) and is the recommended primary uncertainty quantification for this problem; bootstrap is reported as supplementary.
 - **GEV support-boundary divergences in NUTS.** The GEV likelihood is −∞ outside `1 + ξ(y−μ)/σ > 0`, creating a sharp boundary that NUTS occasionally crosses (~2.7% divergence rate). Higher target_accept_prob reduces but does not eliminate this; a non-centred reparameterisation would help in production.
-- **Asymptotic SE invalid.** Fisher information gives SE for ξ ≈ 0.12; bootstrap SE is 1.76 (14.5× larger). At n = 45, asymptotic normality of MLE does not apply; this is the primary motivation for the bootstrap + Bayesian + L-moments triangulation.
+- **Asymptotic SE invalid.** Fisher information gives SE for ξ ≈ 0.12; non-parametric bootstrap SE is 1.39 (≈ 11.6× larger). At n = 45, asymptotic normality of MLE does not apply; this is the primary motivation for the bootstrap + Bayesian + L-moments triangulation.
 - **All NA tracks, not landfalls.** Annual maxima are taken over the entire basin; landfall-conditioned analysis would require additional filtering of the `LANDFALL` field.
 - **No declustering.** Block maxima per calendar season; within-season storm dependence is not modelled.
 - **USA_WIND quantization.** NHC best-track values are reported in 5-kt increments; this contributes ~1.1 kt to RL_100 uncertainty — roughly 10× smaller than sampling SE and therefore not corrected for.

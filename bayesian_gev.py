@@ -18,16 +18,22 @@ Extreme Values, Chapter 9 (Bayesian inference for extremes).
 """
 from __future__ import annotations
 
+import os
+import warnings
 from pathlib import Path
 
-import jax
-import jax.numpy as jnp
-import numpy as np
-import numpyro
-import numpyro.distributions as dist
-from numpyro.infer import MCMC, NUTS
+# Pin JAX to CPU before any jax import: bit-identical NUTS results on hiring
+# manager's laptop regardless of whether they have a CUDA device.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
-from fit_gev import (
+import jax  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
+import numpyro  # noqa: E402
+import numpyro.distributions as dist  # noqa: E402
+from numpyro.infer import MCMC, NUTS  # noqa: E402
+
+from fit_gev import (  # noqa: E402
     DATA_PATH,
     FIG_DIR,
     RETURN_PERIODS,
@@ -115,8 +121,7 @@ def plot_posterior(samples: dict, path: Path) -> None:
     fig.suptitle("Bayesian GEV — posterior marginals (NUTS, 4 chains)")
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    import matplotlib.pyplot as plt2
-    plt2.close(fig)
+    plt.close(fig)
 
 
 def plot_return_level_posterior(samples: dict, am: np.ndarray, path: Path) -> None:
@@ -148,8 +153,7 @@ def plot_return_level_posterior(samples: dict, am: np.ndarray, path: Path) -> No
     ax.grid(True, which="both", alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    import matplotlib.pyplot as plt2
-    plt2.close(fig)
+    plt.close(fig)
 
 
 def main() -> int:
@@ -165,6 +169,7 @@ def main() -> int:
 
     mcmc = run_nuts(am.values)
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
+    samples_by_chain = {k: np.asarray(v) for k, v in mcmc.get_samples(group_by_chain=True).items()}
 
     print()
     print("=" * 60)
@@ -185,40 +190,41 @@ def main() -> int:
     plot_return_level_posterior(samples, am.values, FIG_DIR / "return_level_bayes.png")
     print(f"\nfigures written to {FIG_DIR}/")
 
-    # Convergence gate: refuse to save posterior if chains have not mixed.
-    # Compute split R-hat (Gelman et al. 2013, BDA3 §11.4) on each parameter.
-    import warnings
+    # Convergence diagnostics: split-Rhat (Gelman et al. 2013, BDA3 §11.4) +
+    # divergence rate. We report and warn but do not abort — the posterior is
+    # still saved with provenance so downstream consumers can inspect the
+    # diagnostics in the .npz header.
     rhats = {}
     for name in ("mu", "sigma", "xi"):
-        arr = samples[name].reshape(NUM_CHAINS, -1)
-        # Split each chain in half (split-Rhat)
-        split = arr.reshape(2 * NUM_CHAINS, -1)
+        arr = samples_by_chain[name]  # (NUM_CHAINS, NUM_SAMPLES), no reshape needed
+        split = arr.reshape(2 * NUM_CHAINS, -1)  # split each chain in half (split-Rhat)
         means = split.mean(axis=1)
         within = split.var(axis=1, ddof=1).mean()
         between = split.shape[1] * means.var(ddof=1)
         m = split.shape[1]
         var_hat = ((m - 1) / m) * within + between / m
         rhats[name] = float(np.sqrt(var_hat / within)) if within > 0 else float("nan")
+    if any(np.isnan(r) for r in rhats.values()):
+        raise RuntimeError(f"split-Rhat is NaN (degenerate chain, within-chain var=0): {rhats}")
     n_div = int(mcmc.get_extra_fields()["diverging"].sum())
-    print(f"\nConvergence gate (split-Rhat ≤ 1.01, divergences < 5%):")
     rhat_max = max(rhats.values())
     div_rate = n_div / (NUM_CHAINS * NUM_SAMPLES)
+    print(f"\nConvergence diagnostics (target: split-Rhat ≤ 1.01, divergences < 5%):")
     print(f"  split-Rhat: mu={rhats['mu']:.4f}, sigma={rhats['sigma']:.4f}, xi={rhats['xi']:.4f}")
     print(f"  divergences: {n_div}/{NUM_CHAINS * NUM_SAMPLES} ({div_rate:.2%})")
     if rhat_max > 1.01:
         warnings.warn(
-            f"split-Rhat {rhat_max:.3f} > 1.01: chains may not have mixed. "
-            f"Posterior is being saved but downstream consumers should treat with care.",
+            f"split-Rhat {rhat_max:.3f} > 1.01: chains may not have mixed.",
             RuntimeWarning, stacklevel=2,
         )
         print(f"  ⚠ R-hat = {rhat_max:.3f} > 1.01 (chains may not have mixed)")
-    elif div_rate > 0.05:
+    if div_rate > 0.05:
         warnings.warn(
             f"divergence rate {div_rate:.1%} > 5%: NUTS hit support boundary frequently.",
             RuntimeWarning, stacklevel=2,
         )
         print(f"  ⚠ divergence rate {div_rate:.1%} > 5%")
-    else:
+    if rhat_max <= 1.01 and div_rate <= 0.05:
         print(f"  ✓ converged")
 
     np.savez(

@@ -9,18 +9,19 @@ Run:
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2, cramervonmises, genextreme, kstest, norm
+from scipy.stats import cramervonmises, genextreme, kstest, norm
 
 # === Constants ===
 DATA_PATH = Path(__file__).parent / "data" / "raw" / "ibtracs.NA.list.v04r01.csv"
 FIG_DIR = Path(__file__).parent / "figures"
 SEASON_MIN = 1980
 SEASON_MAX = 2024
-RETURN_PERIODS = (10, 25, 50, 100, 250, 500)
+RETURN_PERIODS = (2, 5, 10, 25, 50, 100, 250, 500)
 BOOTSTRAP_B = 1000
 BOOTSTRAP_SEED = 20260521
 
@@ -40,11 +41,11 @@ def load_ibtracs(path: Path) -> pd.DataFrame:
     )
 
 
-def clean(df: pd.DataFrame) -> pd.DataFrame:
+def clean(df: pd.DataFrame, season_min: int = SEASON_MIN, season_max: int = SEASON_MAX) -> pd.DataFrame:
     out = df[df["BASIN"] == "NA"].copy()
     out["SEASON"] = pd.to_numeric(out["SEASON"], errors="coerce")
     out["USA_WIND"] = pd.to_numeric(out["USA_WIND"], errors="coerce")
-    out = out[(out["SEASON"] >= SEASON_MIN) & (out["SEASON"] <= SEASON_MAX)]
+    out = out[(out["SEASON"] >= season_min) & (out["SEASON"] <= season_max)]
     out = out[out["USA_WIND"].notna() & (out["USA_WIND"] > 0)]
     return out
 
@@ -108,6 +109,9 @@ def return_level(params: dict, T: float) -> float:
     return float(genextreme.ppf(1 - 1 / T, params["_scipy_c"], params["mu"], params["sigma"]))
 
 
+_FIT_ERRORS = (RuntimeError, ValueError, FloatingPointError, OverflowError, np.linalg.LinAlgError)
+
+
 def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dict:
     rng = np.random.default_rng(seed)
     n = len(am)
@@ -119,7 +123,7 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
         resample = rng.choice(vals, size=n, replace=True)
         try:
             p = fit_gev(pd.Series(resample))
-        except (RuntimeError, ValueError, FloatingPointError):
+        except _FIT_ERRORS:
             xis[b] = np.nan
             for T in periods:
                 rls[T][b] = np.nan
@@ -130,7 +134,6 @@ def bootstrap(am: pd.Series, B: int, periods: tuple[int, ...], seed: int) -> dic
             rls[T][b] = return_level(p, T)
     failure_rate = n_failed / B
     if failure_rate > 0.01:
-        import warnings
         warnings.warn(
             f"bootstrap: {n_failed}/{B} ({failure_rate:.1%}) MLE fits failed; "
             f"surviving samples may be biased toward well-behaved resamples",
@@ -156,10 +159,8 @@ def mann_kendall_trend(values: np.ndarray) -> dict:
     """
     from collections import Counter
     n = len(values)
-    s = 0
-    for i in range(n - 1):
-        for j in range(i + 1, n):
-            s += np.sign(values[j] - values[i])
+    i_idx, j_idx = np.triu_indices(n, k=1)
+    s = int(np.sign(values[j_idx] - values[i_idx]).sum())
     # Tie correction: subtract sum_groups t(t-1)(2t+5) for each tie group of size t>1
     ties = Counter(values)
     tie_term = sum(t * (t - 1) * (2 * t + 5) for t in ties.values() if t > 1)
@@ -170,17 +171,20 @@ def mann_kendall_trend(values: np.ndarray) -> dict:
         z = (s + 1) / np.sqrt(var_s)
     else:
         z = 0.0
-    p = 2 * (1 - norm.cdf(abs(z)))
+    p = float(2 * norm.sf(abs(z)))  # sf avoids underflow for large |z|
     tau = s / (n * (n - 1) / 2)
-    return {"tau": float(tau), "S": float(s), "z": float(z), "p_value": float(p),
+    return {"tau": float(tau), "S": float(s), "z": float(z), "p_value": p,
             "n_tied_groups": sum(1 for t in ties.values() if t > 1)}
 
 
-def goodness_of_fit(am: pd.Series, params: dict, B_lilliefors: int = 500, seed: int = 20260521) -> dict:
+def goodness_of_fit(am: pd.Series, params: dict, B_null: int = 500, seed: int = BOOTSTRAP_SEED) -> dict:
     """KS + Lilliefors-corrected KS + Cramer-von Mises tests for GEV adequacy.
 
-    The raw KS p-value is optimistic because the GEV parameters were estimated
-    from the same data; Lilliefors correction via parametric bootstrap fixes this.
+    Raw KS / CvM p-values from scipy use the known-parameter null distribution;
+    when parameters are estimated from the same data, that null is wrong (too
+    optimistic). Both p-values are corrected via the same parametric-bootstrap
+    procedure: simulate from the fitted GEV, refit, compute the statistic, and
+    use the empirical null as the reference distribution.
     """
     x = am.values
     c = params["_scipy_c"]
@@ -188,40 +192,40 @@ def goodness_of_fit(am: pd.Series, params: dict, B_lilliefors: int = 500, seed: 
     scale = params["sigma"]
     ks_stat, ks_p_raw = kstest(x, "genextreme", args=(c, loc, scale))
     cvm = cramervonmises(x, "genextreme", args=(c, loc, scale))
-    # Lilliefors via parametric bootstrap (mirror bootstrap()'s defensive pattern)
     rng = np.random.default_rng(seed)
-    null_ks = np.full(B_lilliefors, np.nan)
-    for b in range(B_lilliefors):
+    null_ks = np.full(B_null, np.nan)
+    null_cvm = np.full(B_null, np.nan)
+    for b in range(B_null):
         try:
             sim = genextreme.rvs(c, loc=loc, scale=scale, size=len(x), random_state=rng)
             c_s, loc_s, scale_s = genextreme.fit(sim)
             null_ks[b], _ = kstest(sim, "genextreme", args=(c_s, loc_s, scale_s))
-        except (RuntimeError, ValueError, FloatingPointError):
-            pass  # leave as nan; will be excluded below
-    valid = ~np.isnan(null_ks)
-    ks_p_lilli = float((null_ks[valid] >= ks_stat).mean()) if valid.any() else float("nan")
+            null_cvm[b] = cramervonmises(sim, "genextreme", args=(c_s, loc_s, scale_s)).statistic
+        except _FIT_ERRORS:
+            pass  # leave as nan; excluded below
+    ks_valid = ~np.isnan(null_ks)
+    cvm_valid = ~np.isnan(null_cvm)
+    ks_p_lilli = float((null_ks[ks_valid] >= ks_stat).mean()) if ks_valid.any() else float("nan")
+    cvm_p_boot = float((null_cvm[cvm_valid] >= cvm.statistic).mean()) if cvm_valid.any() else float("nan")
     return {
         "ks_stat": float(ks_stat),
         "ks_p_raw": float(ks_p_raw),
         "ks_p_lilliefors": ks_p_lilli,
         "cvm_stat": float(cvm.statistic),
-        "cvm_p": float(cvm.pvalue),
+        "cvm_p_raw": float(cvm.pvalue),
+        "cvm_p_bootstrap": cvm_p_boot,
     }
 
 
 def cutoff_sensitivity(df_raw: pd.DataFrame, cutoffs: tuple = (1970, 1980, 1990, 2000)) -> list:
     """Refit GEV with different SEASON cutoffs to test stability of the 1980 choice.
 
-    Expects df_raw post-`load_ibtracs` (before `clean`) so the SEASON filter
-    can be widened. Applies BASIN=='NA' and USA_WIND>0 filters internally.
+    Expects df_raw post-`load_ibtracs` (before `clean`); reapplies `clean()` per
+    cutoff so filtering stays consistent with the main pipeline.
     """
-    df = df_raw[df_raw["BASIN"] == "NA"].copy()
-    df["SEASON"] = pd.to_numeric(df["SEASON"], errors="coerce")
-    df["USA_WIND"] = pd.to_numeric(df["USA_WIND"], errors="coerce")
-    df = df[df["USA_WIND"].notna() & (df["USA_WIND"] > 0)]
     rows = []
     for start in cutoffs:
-        sub = df[(df["SEASON"] >= start) & (df["SEASON"] <= SEASON_MAX)]
+        sub = clean(df_raw, season_min=start, season_max=SEASON_MAX)
         am = sub.groupby("SEASON")["USA_WIND"].max()
         if len(am) < 10:
             continue
@@ -344,10 +348,11 @@ def main() -> int:
     print()
     print("Goodness-of-fit (three tests; H0: data drawn from fitted GEV):")
     gof = goodness_of_fit(am, params)
-    print(f"  Kolmogorov-Smirnov (raw):          D = {gof['ks_stat']:.4f}, p = {gof['ks_p_raw']:.4f}")
-    print(f"  Lilliefors-corrected KS (B=500):                       p = {gof['ks_p_lilliefors']:.4f}")
-    print(f"  Cramer-von Mises:                  W = {gof['cvm_stat']:.4f}, p = {gof['cvm_p']:.4f}")
-    gof_pass = gof["ks_p_lilliefors"] > 0.05 and gof["cvm_p"] > 0.05
+    print(f"  Kolmogorov-Smirnov (raw, optimistic):  D = {gof['ks_stat']:.4f}, p = {gof['ks_p_raw']:.4f}")
+    print(f"  Lilliefors-corrected KS (B=500):                              p = {gof['ks_p_lilliefors']:.4f}")
+    print(f"  Cramer-von Mises (raw, optimistic):    W = {gof['cvm_stat']:.4f}, p = {gof['cvm_p_raw']:.4f}")
+    print(f"  Cramer-von Mises (param. bootstrap):                          p = {gof['cvm_p_bootstrap']:.4f}")
+    gof_pass = gof["ks_p_lilliefors"] > 0.05 and gof["cvm_p_bootstrap"] > 0.05
     print(f"  → GEV adequacy: {'supported' if gof_pass else 'REJECTED'} at alpha=0.05")
     print()
     print(f"Cutoff sensitivity (xi stability across SEASON start years):")

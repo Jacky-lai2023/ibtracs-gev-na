@@ -184,14 +184,14 @@ def plot_catalogue(catalogue: np.ndarray, storms: pd.DataFrame, path: Path) -> N
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    import matplotlib.pyplot as plt2
-    plt2.close(fig)
+    plt.close(fig)
 
 
 def main() -> int:
     if not POSTERIOR_PATH.exists():
         print(f"missing {POSTERIOR_PATH} -- run: python bayesian_gev.py first")
         return 1
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     samples_raw = np.load(POSTERIOR_PATH)
     samples = {k: samples_raw[k] for k in ("mu", "sigma", "xi")}
