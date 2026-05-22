@@ -1,7 +1,11 @@
 [project]
 name = "ibtracs-gev-na"
+# Narrowed from >=3.10 to >=3.11,<3.14: under >=3.10 the lock resolves to two
+# distinct numpyro/jax major-version branches (0.19 vs 0.21), which is enough
+# to perturb NUTS posterior tails even with identical seeds. 3.11..3.13 keeps
+# a single resolution branch.
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "jax>=0.4",
     "matplotlib>=3.7",
@@ -11,3 +15,13 @@ dependencies = [
     "requests>=2.28",
     "scipy>=1.11",
 ]
+
+[tool.uv]
+# Resolve against PyPI only; the user's global config may include a private
+# CUDA index that leaks into the lock and breaks fresh clones.
+index-strategy = "first-index"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

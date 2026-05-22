@@ -45,13 +45,22 @@ def main() -> int:
                     written += len(chunk)
                     if total:
                         pct = 100 * written / total
-                        print(f"\r  {written / 1e6:6.1f} / {total / 1e6:.1f} MB ({pct:5.1f}%)", end="")
+                        print(f"\r  {written / 1e6:6.1f} / {total / 1e6:.1f} MB ({pct:5.1f}%)", end="", flush=True)
             print()
         # Capture size BEFORE any unlink, so error messages format correctly.
         actual_size = tmp.stat().st_size
-        if total and actual_size != total:
+        if total:
+            if actual_size != total:
+                raise RuntimeError(
+                    f"incomplete download: got {actual_size} bytes, expected {total}"
+                )
+        else:
+            # No Content-Length on either HEAD or GET; refuse to silently accept.
+            # A truncated file could otherwise pass through to downstream analysis.
             raise RuntimeError(
-                f"incomplete download: got {actual_size} bytes, expected {total}"
+                "server did not provide Content-Length on either HEAD or GET; "
+                "cannot verify download integrity. Re-run later or fetch the file manually "
+                f"({actual_size} bytes written to {tmp})."
             )
         # Atomic rename only after a complete, size-verified download.
         tmp.replace(OUT)

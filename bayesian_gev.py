@@ -99,6 +99,9 @@ def posterior_return_level(samples: dict, T: float) -> np.ndarray:
 
 
 def summarise(arr: np.ndarray, alpha: float = 0.05) -> tuple[float, float, float]:
+    arr = arr[np.isfinite(arr)]  # drop nan/inf (e.g. xi≈0 in posterior_return_level)
+    if len(arr) == 0:
+        return float("nan"), float("nan"), float("nan")
     med = float(np.median(arr))
     lo = float(np.quantile(arr, alpha / 2))
     hi = float(np.quantile(arr, 1 - alpha / 2))
@@ -194,6 +197,7 @@ def main() -> int:
     # divergence rate. We report and warn but do not abort — the posterior is
     # still saved with provenance so downstream consumers can inspect the
     # diagnostics in the .npz header.
+    assert NUM_SAMPLES % 2 == 0, f"NUM_SAMPLES must be even for split-Rhat; got {NUM_SAMPLES}"
     rhats = {}
     for name in ("mu", "sigma", "xi"):
         arr = samples_by_chain[name]  # (NUM_CHAINS, NUM_SAMPLES), no reshape needed

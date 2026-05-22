@@ -212,8 +212,14 @@ def main() -> int:
     # disabling the unsafe deserialiser is defensive against tampered files.
     _ALLOW_PICKLE = False  # noqa: redefined here for explicit intent
     with np.load(POSTERIOR_PATH, allow_pickle=_ALLOW_PICKLE) as samples_raw:
-        samples = {k: np.asarray(samples_raw[k]) for k in ("mu", "sigma", "xi")}
-        rhats = {k: float(samples_raw[f"_rhat_{k}"]) for k in ("mu", "sigma", "xi")}
+        try:
+            samples = {k: np.asarray(samples_raw[k]) for k in ("mu", "sigma", "xi")}
+            rhats = {k: float(samples_raw[f"_rhat_{k}"]) for k in ("mu", "sigma", "xi")}
+        except KeyError as e:
+            raise RuntimeError(
+                f"posterior_samples.npz is missing key {e!s} — likely written by an older "
+                f"bayesian_gev.py without R-hat provenance. Re-run: python bayesian_gev.py"
+            ) from e
     print(f"loaded {len(samples['mu']):,} posterior samples "
           f"(R-hat: mu={rhats['mu']:.3f}, sigma={rhats['sigma']:.3f}, xi={rhats['xi']:.3f})")
     if max(rhats.values()) > 1.01:
@@ -225,6 +231,11 @@ def main() -> int:
 
     # 1. Synthetic catalogue
     cat = sample_catalogue(samples, CATALOGUE_YEARS, SEED)
+    if len(cat) == 0:
+        raise RuntimeError(
+            "synthetic catalogue is empty — every posterior-predictive GEV draw was "
+            "non-finite. Inspect posterior_samples.npz for pathological mu/sigma/xi."
+        )
     print(f"synthetic catalogue: n={len(cat):,}, min={cat.min():.1f}, max={cat.max():.1f}, "
           f"median={np.median(cat):.1f}")
 
@@ -271,7 +282,7 @@ def main() -> int:
 
     # Save table as markdown for README inclusion
     md_path = Path(__file__).parent / "figures" / "named_storms.md"
-    with md_path.open("w") as f:
+    with md_path.open("w", encoding="utf-8") as f:
         f.write("| Storm | Peak USA_WIND (kt) | RP median (yr) | RP 95% CrI (yr) | Synthetic empirical RP (yr) |\n")
         f.write("|---|---:|---:|---:|---:|\n")
         for r in rows:

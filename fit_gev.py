@@ -203,6 +203,7 @@ def goodness_of_fit(am: pd.Series, params: dict, B_null: int = 500, seed: int = 
     rng = np.random.default_rng(seed)
     null_ks = np.full(B_null, np.nan)
     null_cvm = np.full(B_null, np.nan)
+    n_failed = 0
     for b in range(B_null):
         try:
             sim = genextreme.rvs(c, loc=loc, scale=scale, size=len(x), random_state=rng)
@@ -210,7 +211,14 @@ def goodness_of_fit(am: pd.Series, params: dict, B_null: int = 500, seed: int = 
             null_ks[b], _ = kstest(sim, "genextreme", args=(c_s, loc_s, scale_s))
             null_cvm[b] = cramervonmises(sim, "genextreme", args=(c_s, loc_s, scale_s)).statistic
         except _FIT_ERRORS:
-            pass  # leave as nan; excluded below
+            n_failed += 1  # leave arrays as nan; excluded below
+    failure_rate = n_failed / B_null
+    if failure_rate > 0.01:
+        warnings.warn(
+            f"goodness_of_fit: {n_failed}/{B_null} ({failure_rate:.1%}) parametric-bootstrap "
+            f"GEV refits failed; null distribution may be biased toward well-behaved samples",
+            RuntimeWarning, stacklevel=2,
+        )
     ks_valid = ~np.isnan(null_ks)
     cvm_valid = ~np.isnan(null_cvm)
     ks_p_lilli = float((null_ks[ks_valid] >= ks_stat).mean()) if ks_valid.any() else float("nan")
@@ -222,6 +230,8 @@ def goodness_of_fit(am: pd.Series, params: dict, B_null: int = 500, seed: int = 
         "cvm_stat": float(cvm.statistic),
         "cvm_p_raw": float(cvm.pvalue),
         "cvm_p_bootstrap": cvm_p_boot,
+        "_n_failed": n_failed,
+        "_B_null": B_null,
     }
 
 
@@ -236,11 +246,21 @@ def cutoff_sensitivity(df_raw: pd.DataFrame, cutoffs: tuple = (1970, 1980, 1990,
         sub = clean(df_raw, season_min=start, season_max=SEASON_MAX)
         am = sub.groupby("SEASON")["USA_WIND"].max()
         if len(am) < 10:
+            rows.append({"cutoff": start, "n": int(len(am)), "xi": float("nan"),
+                         "mu": float("nan"), "sigma": float("nan"), "rl_100": float("nan"),
+                         "note": "skipped (n<10)"})
             continue
-        c, loc, scale = genextreme.fit(am.values)
-        rl100 = float(genextreme.ppf(0.99, c, loc, scale))
-        rows.append({"cutoff": start, "n": int(len(am)), "xi": float(-c),
-                     "mu": float(loc), "sigma": float(scale), "rl_100": rl100})
+        try:
+            c, loc, scale = genextreme.fit(am.values)
+            rl100 = float(genextreme.ppf(0.99, c, loc, scale))
+            rows.append({"cutoff": start, "n": int(len(am)), "xi": float(-c),
+                         "mu": float(loc), "sigma": float(scale), "rl_100": rl100})
+        except _FIT_ERRORS as e:
+            warnings.warn(f"cutoff {start}: MLE fit failed ({type(e).__name__}); row skipped",
+                          RuntimeWarning, stacklevel=2)
+            rows.append({"cutoff": start, "n": int(len(am)), "xi": float("nan"),
+                         "mu": float("nan"), "sigma": float("nan"), "rl_100": float("nan"),
+                         "note": f"fit failed: {type(e).__name__}"})
     return rows
 
 
@@ -360,6 +380,9 @@ def main() -> int:
     print(f"  Lilliefors-corrected KS (B=500):                              p = {gof['ks_p_lilliefors']:.4f}")
     print(f"  Cramer-von Mises (raw, optimistic):    W = {gof['cvm_stat']:.4f}, p = {gof['cvm_p_raw']:.4f}")
     print(f"  Cramer-von Mises (param. bootstrap):                          p = {gof['cvm_p_bootstrap']:.4f}")
+    if gof.get("_n_failed", 0) > 0:
+        print(f"  GoF parametric-bootstrap failures: {gof['_n_failed']}/{gof['_B_null']} "
+              f"({gof['_n_failed']/gof['_B_null']:.2%})")
     gof_pass = gof["ks_p_lilliefors"] > 0.05 and gof["cvm_p_bootstrap"] > 0.05
     print(f"  → GEV adequacy: {'supported' if gof_pass else 'REJECTED'} at alpha=0.05")
     print()
@@ -367,7 +390,11 @@ def main() -> int:
     print(f"  {'cutoff':>6} | {'n':>3} | {'xi':>9} | {'RL_100 (kt)':>12}")
     for r in cutoff_sensitivity(df_raw):
         marker = " ← current" if r["cutoff"] == SEASON_MIN else ""
-        print(f"  {r['cutoff']:>6} | {r['n']:>3} | {r['xi']:>+9.4f} | {r['rl_100']:>12.2f}{marker}")
+        if np.isnan(r["xi"]):
+            note = r.get("note", "skipped")
+            print(f"  {r['cutoff']:>6} | {r['n']:>3} | {'  --':>9} | {note:>12}{marker}")
+        else:
+            print(f"  {r['cutoff']:>6} | {r['n']:>3} | {r['xi']:>+9.4f} | {r['rl_100']:>12.2f}{marker}")
 
     plot_fit(am, params, FIG_DIR / "gev_fit.png")
     plot_return_level(am, params, boot, FIG_DIR / "return_level.png")

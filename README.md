@@ -35,12 +35,14 @@ The three estimators agree within a tight **165–171 kt window**, consistent wi
 
 ## Quickstart
 
+Requires Python 3.11–3.13. `uv sync` (recommended) installs the exact versions from `uv.lock`; `pip install -r requirements.txt` is the equivalent pinned fallback (both files are kept in sync via `uv export`).
+
 ```bash
-uv sync                       # or: pip install -r requirements.txt
-python download.py            # fetch IBTrACS NA basin CSV (~57 MB) from NOAA NCEI
-python fit_gev.py             # MLE + bootstrap + L-moments + Mann-Kendall + GoF triple + cutoff sensitivity  (~3 s)
-python bayesian_gev.py        # NUTS, 4 chains, 1k warmup + 2k samples (~10 s CPU)
-python event_catalogue.py     # 10000-yr posterior-predictive catalogue + named storms + Saffir-Simpson PPC
+uv sync                       # or: pip install -r requirements.txt  (both pinned)
+uv run python download.py     # fetch IBTrACS NA basin CSV (~57 MB) from NOAA NCEI
+uv run python fit_gev.py      # MLE + bootstrap + L-moments + Mann-Kendall + GoF + cutoff sensitivity  (~3 s)
+uv run python bayesian_gev.py # NUTS, 4 chains, 1k warmup + 2k samples (~10 s CPU)
+uv run python event_catalogue.py  # 10000-yr posterior-predictive catalogue + named storms + Saffir-Simpson PPC
 ```
 
 All outputs land in `figures/` plus stdout reports.
