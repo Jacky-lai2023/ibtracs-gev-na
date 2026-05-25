@@ -4,6 +4,16 @@
 
 Three estimators (MLE, L-moments, Bayesian NUTS) triangulate the 100-year return level; a 10,000-year stochastic catalogue is drawn from the Bayesian posterior; 17 named historic storms (Allen, Andrew, Katrina, Wilma, Irma, Maria, Ian, …) are attributed posterior return periods. The analysis is validated by a Saffir-Simpson posterior predictive check (max 1.29 pp error across six bands), three goodness-of-fit tests (KS / Lilliefors / Cramer-von Mises, all p ≫ 0.05), and a cutoff sensitivity table.
 
+## Development note — AI-paired build
+
+This repository is the output of an **AI-paired build loop** (Claude Code as the implementation collaborator) under my direction. I want to be explicit about the division of labour so reviewers don't have to guess:
+
+- **Mine:** project scope (single basin, stationary, block-maxima — deliberately narrow), methodology choices (three-estimator triangulation, posterior-predictive catalogue, Saffir-Simpson PPC as the validation lens, Mann-Kendall stationarity disclosure), priors (`ξ ∼ Normal(−0.2, 0.15)` anchored on TC-EVT literature), the multi-round audit protocol (10 rounds × ~5 fresh-context reviewer agents per round, with a "5 consecutive clean rounds" stopping rule), every accept/reject decision against the audit findings, and the honesty boundary (the *Limitations* section below is my list, not the AI's).
+- **AI-assisted:** the Python implementation itself, draft prose for this README and the *Limitations* section (written from my methodology notes), parametric-bootstrap correction details for the goodness-of-fit tests, and the JAX double-where / Gumbel-limit numerical patterns in `bayesian_gev.py`. Every AI-produced line was reviewed and either accepted, edited, or rejected by me before commit.
+- **Cross-checks I require of the AI:** every numeric claim in this README reconciles to a code path; L-moments transcribed from Hosking 1990 cross-checks against the `lmoments3` reference; the Mann-Kendall ties correction follows Hipel & McLeod 1994 verbatim; posterior diagnostics (split-Rhat, divergence rate, ESS) are surfaced rather than hidden.
+
+This is the workflow I want to bring to a catastrophe-modelling R&D team: AI as an accelerator on the implementation axis, candidate judgment on the methodology, scope, verification, and disclosure axes.
+
 ---
 
 ## Headline result
